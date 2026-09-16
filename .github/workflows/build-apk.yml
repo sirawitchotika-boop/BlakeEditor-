@@ -1,0 +1,56 @@
+name: Build Debug APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Download Ace Editor Assets
+        run: |
+          mkdir -p app/src/main/assets/editor/vendor/ace
+          ACE_BASE="https://cdnjs.cloudflare.com/ajax/libs/ace/1.44.0"
+          for file in ace.js mode-text.js mode-markdown.js mode-kotlin.js mode-javascript.js mode-python.js mode-html.js mode-css.js mode-json.js mode-xml.js theme-twilight.js theme-chrome.js ext-searchbox.js; do
+            curl -sSL "$ACE_BASE/$file" -o "app/src/main/assets/editor/vendor/ace/$file"
+          done
+          ls -la app/src/main/assets/editor/vendor/ace
+
+      - name: Download Markdown Preview Assets
+        run: |
+          mkdir -p app/src/main/assets/editor/vendor/marked app/src/main/assets/editor/vendor/dompurify
+          curl -sSL "https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js" -o "app/src/main/assets/editor/vendor/marked/marked.min.js" || curl -sSL "https://cdnjs.cloudflare.com/ajax/libs/marked/18.0.7/marked.min.js" -o "app/src/main/assets/editor/vendor/marked/marked.min.js"
+          curl -sSL "https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.15/purify.min.js" -o "app/src/main/assets/editor/vendor/dompurify/purify.min.js"
+          ls -la app/src/main/assets/editor/vendor/marked
+          ls -la app/src/main/assets/editor/vendor/dompurify
+
+      - name: Ensure Gradle Wrapper
+        run: |
+          if [ ! -f "gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            gradle wrapper --gradle-version 9.6.0
+          fi
+          chmod +x gradlew
+
+      - name: Run Unit Tests & Build Debug APK
+        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: BlakeEditor-Debug-APK
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7

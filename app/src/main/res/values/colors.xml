@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="bg_dark">#FF121212</color>
+    <color name="surface_dark">#FF1E1E1E</color>
+    <color name="bg_amoled">#FF000000</color>
+    <color name="surface_amoled">#FF000000</color>
+    <color name="bg_eyecare">#FFF8F1E5</color>
+    <color name="surface_eyecare">#FFEDE4D3</color>
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary_dark">#FFAAAAAA</color>
+    <color name="text_primary_eyecare">#FF2C2523</color>
+    <color name="text_secondary_eyecare">#FF7D756D</color>
+</resources>

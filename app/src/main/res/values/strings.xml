@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Blake Editor</string>
+    <string name="welcome_placeholder">Blake Editor   Phase 8 Ready</string>
+    <string name="action_new">New</string>
+    <string name="action_open">Open</string>
+    <string name="action_save">Save</string>
+    <string name="action_save_as">Save As</string>
+    <string name="action_undo">↶</string>
+    <string name="action_redo">↷</string>
+    <string name="action_theme">Theme</string>
+    <string name="action_preview">Preview</string>
+    <string name="action_edit">Edit</string>
+    <string name="dialog_theme_title">Select Theme</string>
+    <string name="dialog_unsaved_title">Unsaved Changes</string>
+    <string name="dialog_unsaved_message">You have unsaved changes. Do you want to discard them?</string>
+    <string name="dialog_discard">Discard</string>
+    <string name="dialog_cancel">Cancel</string>
+</resources>
