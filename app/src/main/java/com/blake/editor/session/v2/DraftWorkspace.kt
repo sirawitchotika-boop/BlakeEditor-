@@ -1,0 +1,89 @@
+package com.blake.editor.session.v2
+
+/**
+ * Document actions shared by the V2 Home screen and editor.
+ *
+ * A successful switch or Home navigation means the active document's latest
+ * recovery snapshot has already been written. File saves are separate and
+ * are intentionally not part of this preview milestone.
+ */
+class DraftWorkspace(private val store: RecoveryDraftStore) {
+
+    fun createUntitled(): Result<RecoveryDraft> = runCatching {
+        val draft = RecoveryDraft(
+            id = DocumentIdentity.newUntitled(),
+            sourceUri = null,
+            displayName = "Untitled",
+            language = "PLAIN_TEXT",
+            content = ""
+        )
+        store.save(draft).getOrThrow()
+        draft
+    }
+
+    fun openFromFile(
+        sourceUri: String,
+        displayName: String,
+        language: String,
+        fileContent: String
+    ): Result<RecoveryDraft> = runCatching {
+        val id = DocumentIdentity.forUri(sourceUri)
+        val existing = store.load(id).getOrThrow()
+        if (existing != null) return@runCatching existing
+
+        val draft = RecoveryDraft(
+            id = id,
+            sourceUri = sourceUri,
+            displayName = displayName,
+            language = language,
+            content = fileContent
+        )
+        store.save(draft).getOrThrow()
+        draft
+    }
+
+    /** Return the same snapshot when nothing changed, preserving its revision. */
+    fun edit(
+        current: RecoveryDraft,
+        content: String,
+        selectionStart: Int,
+        selectionEnd: Int,
+        scrollY: Int
+    ): RecoveryDraft {
+        val from = selectionStart.coerceIn(0, content.length)
+        val to = selectionEnd.coerceIn(0, content.length)
+        val scroll = scrollY.coerceAtLeast(0)
+        if (current.content == content &&
+            current.selectionStart == from &&
+            current.selectionEnd == to &&
+            current.scrollY == scroll
+        ) {
+            return current
+        }
+        return current.copy(
+            content = content,
+            selectionStart = from,
+            selectionEnd = to,
+            scrollY = scroll,
+            revision = current.revision + 1,
+            updatedAtMs = System.currentTimeMillis()
+        )
+    }
+
+    fun persist(current: RecoveryDraft): Result<Unit> = store.save(current)
+
+    /** The caller must not leave the editor when this returns a failure. */
+    fun returnHome(current: RecoveryDraft): Result<Unit> = store.save(current)
+
+    /** Switching is forbidden if the outgoing draft could not be stored. */
+    fun switchTo(current: RecoveryDraft, targetId: DocumentIdentity): Result<RecoveryDraft> =
+        runCatching {
+            store.save(current).getOrThrow()
+            store.load(targetId).getOrThrow()
+                ?: error("The selected recovery draft is missing")
+        }
+
+    fun load(id: DocumentIdentity): Result<RecoveryDraft?> = store.load(id)
+
+    fun list(): RecoveryListing = store.list()
+}
