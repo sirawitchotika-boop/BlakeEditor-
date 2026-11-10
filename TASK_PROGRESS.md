@@ -3,9 +3,9 @@
 Objective: implement the approved Blake Editor 2.0 design through reviewable,
 safe milestones, without changing the default branch directly.
 
-Base: feature/blake-v2-foundation-2026-11-10
-Next branch: feature/blake-v2-independent-drafts-2026-11-10
-Foundation commit: 7877b0538f5c3e8105e5120af5ae1da09a8a4299
+Base: main (foundation PR #1 was merged on 2026-11-10)
+Working branch: feature/blake-v2-independent-drafts-2026-11-10
+Foundation merge commit: f534e4109108060c48ad87df88a25e255514b2e9
 
 ## Milestones
 
