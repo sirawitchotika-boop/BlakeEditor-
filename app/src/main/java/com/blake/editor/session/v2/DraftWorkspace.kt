@@ -25,18 +25,32 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
         sourceUri: String,
         displayName: String,
         language: String,
-        fileContent: String
+        fileContent: String,
+        encoding: String? = null,
+        hadBom: Boolean = false,
+        sourceSha256: String? = null
     ): Result<RecoveryDraft> = runCatching {
         val id = DocumentIdentity.forUri(sourceUri)
         val existing = store.load(id).getOrThrow()
-        if (existing != null) return@runCatching existing
+        if (existing != null) {
+            if (existing.savedToDisk && existing.sourceSha256 != null &&
+                sourceSha256 != null && existing.sourceSha256 != sourceSha256
+            ) {
+                error("This file changed outside Blake. Recovery record retained; inspect the file and use Save As.")
+            }
+            return@runCatching existing
+        }
 
         val draft = RecoveryDraft(
             id = id,
             sourceUri = sourceUri,
             displayName = displayName,
             language = language,
-            content = fileContent
+            content = fileContent,
+            sourceEncoding = encoding,
+            sourceHadBom = hadBom,
+            sourceSha256 = sourceSha256,
+            savedToDisk = encoding != null && sourceSha256 != null
         )
         store.save(draft).getOrThrow()
         draft
@@ -62,6 +76,7 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
         }
         return current.copy(
             content = content,
+            savedToDisk = if (current.content != content) false else current.savedToDisk,
             selectionStart = from,
             selectionEnd = to,
             scrollY = scroll,

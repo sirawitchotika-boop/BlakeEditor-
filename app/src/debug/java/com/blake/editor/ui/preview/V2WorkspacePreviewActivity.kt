@@ -24,12 +24,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import com.blake.editor.file.DecodedTextFile
 import com.blake.editor.file.EncodingDetection
 import com.blake.editor.file.TextEncodingCodec
+import com.blake.editor.file.TextFileEncoding
 import com.blake.editor.session.v2.DocumentIdentity
 import com.blake.editor.session.v2.DraftWorkspace
 import com.blake.editor.session.v2.RecoveryDraft
 import com.blake.editor.session.v2.RecoveryDraftStore
+import com.blake.editor.session.v2.VerifiedDocumentSaver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,12 +44,26 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 /**
- * Isolated DEBUG ONLY preview: no original files are written by this screen.
- * V2 recovery drafts are independent of the original Ace editor's V1 drafts.
+ * Isolated DEBUG ONLY preview. Original files change ONLY after an explicit
+ * Save; Save As uses the Android document picker. The original Ace editor is
+ * unaffected and V2 drafts remain separate from V1 recovery storage.
  */
 class V2WorkspacePreviewActivity : AppCompatActivity() {
     private val store by lazy { RecoveryDraftStore(File(filesDir, "v2_recovery")) }
     private val workspace by lazy { DraftWorkspace(store) }
+    private val saver by lazy {
+        VerifiedDocumentSaver(
+            File(filesDir, "v2_save_backups"),
+            readBytes = { uri -> readSmallFile(Uri.parse(uri)) },
+            writeBytes = { uri, bytes ->
+                contentResolver.openOutputStream(Uri.parse(uri), "wt").use { stream ->
+                    requireNotNull(stream) { "Storage provider denied file writing" }
+                    stream.write(bytes)
+                    stream.flush()
+                }
+            }
+        )
+    }
     private val lastChanceSaver = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private lateinit var root: LinearLayout
@@ -59,6 +76,13 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) openLocalFile(uri)
+    }
+
+    private val saveAsPicker = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        if (uri != null) saveAsTo(uri)
+        else status?.text = "Save As canceled · Recovery draft kept"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,7 +146,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         root.removeAllViews()
         label("Blake Editor 2.0", 23f, FG)
         label("Home · Recovery Preview", 16f, FG)
-        label("Changes are kept as recovery drafts. Original files are not changed.", 12f, MUTED)
+        label("Save writes to a real file. Store Draft only keeps recovery data.", 12f, MUTED)
         controls(listOf(
             "New File" to { newFile() },
             "Open File" to { filePicker.launch(arrayOf("*/*")) }
@@ -134,19 +158,28 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         lifecycleScope.launch {
             val listing = withContext(Dispatchers.IO) { workspace.list() }
-            status?.text = "Recovery drafts: " + listing.drafts.size
+            status?.text = "Documents: " + listing.drafts.size
             if (listing.unreadableFiles.isNotEmpty()) {
                 status?.append(" · " + listing.unreadableFiles.size + " unreadable, kept safely")
             }
             if (listing.drafts.isEmpty()) {
                 list.addView(text("No drafts yet. Tap New File.", 15f, MUTED))
             } else {
-                list.addView(text("Continue Writing", 17f, FG))
-                listing.drafts.forEach { draft ->
-                    list.addView(button(
-                        draft.displayName + " · " + draft.language +
-                            "\nDraft · " + draft.content.length + " characters"
-                    ) { loadDraft(draft.id) })
+                val unfinished = listing.drafts.filter { !it.savedToDisk }
+                val saved = listing.drafts.filter { it.savedToDisk }
+                if (unfinished.isNotEmpty()) list.addView(text("Continue Writing", 17f, FG))
+                unfinished.forEach { draft ->
+                    list.addView(button(draft.displayName + " · " + draft.language +
+                        "\nRecovery draft · " + draft.content.length + " characters") {
+                        loadDraft(draft.id)
+                    })
+                }
+                if (saved.isNotEmpty()) list.addView(text("Recent Saved Files", 17f, FG))
+                saved.forEach { draft ->
+                    list.addView(button(draft.displayName + " · " + draft.language +
+                        "\nSaved file · " + draft.content.length + " characters") {
+                        loadDraft(draft.id)
+                    })
                 }
             }
         }
@@ -171,10 +204,12 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         controls(listOf(
             "Home" to { goHome() },
             "Switch" to { switcher() },
+            "Save" to { saveCurrentFile() },
+            "Save As" to { beginSaveAs() },
             "Store Draft" to { storeCurrent() }
         ))
         label(draft.displayName, 18f, FG)
-        label("Recovery only · Original file stays unchanged", 12f, MUTED)
+        label("Save updates the file · Store Draft keeps recovery only", 12f, MUTED)
         binding = true
         val field = TrackedEditText(this).apply {
             setTextColor(FG)
@@ -196,7 +231,8 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
         root.addView(field, LinearLayout.LayoutParams(-1, 0, 1f))
         input = field
-        status = label("Recovery draft stored · Revision " + draft.revision, 12f, MUTED)
+        status = label(if (draft.savedToDisk) "Saved file · Revision " + draft.revision
+            else "Recovery draft stored · Revision " + draft.revision, 12f, MUTED)
         field.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
@@ -324,9 +360,16 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 runCatching {
                     try {
                         contentResolver.takePersistableUriPermission(
-                            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                         )
-                    } catch (_: SecurityException) { /* Recovery works independently. */ }
+                    } catch (_: SecurityException) {
+                        try {
+                            contentResolver.takePersistableUriPermission(
+                                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        } catch (_: SecurityException) { /* Drafts work without persisted grant. */ }
+                    }
                     val name = displayName(uri)
                     val bytes = readSmallFile(uri)
                     Pair(name, bytes)
@@ -335,7 +378,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             busy = false
             result.onSuccess { (name, bytes) ->
                 when (val found = TextEncodingCodec.detect(bytes)) {
-                    is EncodingDetection.Ready -> addOpenedFile(uri, name, found.document.text)
+                    is EncodingDetection.Ready -> addOpenedFile(uri, name, found.document, bytes)
                     is EncodingDetection.ChooseEncoding -> {
                         val candidates = found.previews
                         AlertDialog.Builder(this@V2WorkspacePreviewActivity)
@@ -344,7 +387,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                                 it.encoding.charsetName + " · " + it.text.take(40)
                             }.toTypedArray()) { _, which ->
                                 TextEncodingCodec.decodeWith(bytes, candidates[which].encoding)
-                                    .onSuccess { addOpenedFile(uri, name, it.text) }
+                                    .onSuccess { addOpenedFile(uri, name, it, bytes) }
                                     .onFailure { dialog("Could not decode file", it.message.orEmpty()) }
                             }
                             .setNegativeButton("Cancel", null).show()
@@ -359,16 +402,94 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
     }
 
-    private fun addOpenedFile(uri: Uri, name: String, content: String) {
+    private fun addOpenedFile(uri: Uri, name: String, decoded: DecodedTextFile,
+        sourceBytes: ByteArray) {
         if (busy) return
         busy = true
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                workspace.openFromFile(uri.toString(), name, languageFor(name), content)
+                workspace.openFromFile(uri.toString(), name, languageFor(name), decoded.text,
+                    encoding = decoded.encoding.name,
+                    hadBom = decoded.hadBom,
+                    sourceSha256 = VerifiedDocumentSaver.fingerprint(sourceBytes))
             }
             busy = false
             result.onSuccess { showEditor(it) }
                 .onFailure { dialog("Could not store recovery draft", it.message.orEmpty()) }
+        }
+    }
+
+    private fun saveCurrentFile() {
+        if (active?.sourceUri == null) {
+            beginSaveAs()
+            return
+        }
+        afterStored { snapshot ->
+            val result = withContext(Dispatchers.IO) { saver.saveExisting(snapshot) }
+            result.onSuccess { file ->
+                val updated = VerifiedDocumentSaver.afterSave(
+                    snapshot, file, snapshot.displayName, snapshot.language
+                )
+                val stored = withContext(Dispatchers.IO) { workspace.persist(updated) }
+                if (stored.isSuccess) {
+                    showEditor(updated)
+                    status?.text = "Saved and verified · " + file.verifiedBytes + " bytes"
+                } else {
+                    dialog("File saved, but recovery tracking failed",
+                        "The file was written, but its recovery record could not be updated. " +
+                            stored.exceptionOrNull()?.message.orEmpty())
+                }
+            }.onFailure {
+                dialog("Could not safely save", it.message.orEmpty() +
+                    "\nYour recovery draft is still available. Use Save As if the file changed.")
+            }
+        }
+    }
+
+    private fun beginSaveAs() = afterStored { snapshot ->
+        val name = snapshot.displayName.let {
+            if (it == "Untitled") "Untitled.txt" else it
+        }
+        saveAsPicker.launch(name)
+    }
+
+    private fun saveAsTo(uri: Uri) {
+        if (active?.sourceUri == uri.toString()) {
+            dialog("Choose another file", "Use Save to update the current file.")
+            return
+        }
+        afterStored { snapshot ->
+            val encoding = runCatching {
+                TextFileEncoding.valueOf(snapshot.sourceEncoding ?: "UTF8")
+            }.getOrDefault(TextFileEncoding.UTF8)
+            val result = withContext(Dispatchers.IO) {
+                saver.saveAs(snapshot, uri.toString(), encoding, snapshot.sourceHadBom)
+            }
+            result.onSuccess { file ->
+                val name = withContext(Dispatchers.IO) { displayName(uri) }
+                val updated = VerifiedDocumentSaver.afterSave(
+                    snapshot, file, name, languageFor(name)
+                )
+                val stored = withContext(Dispatchers.IO) { workspace.persist(updated) }
+                if (stored.isSuccess) {
+                    val cleared = withContext(Dispatchers.IO) {
+                        store.clearSavedRevision(snapshot.id, snapshot.revision)
+                    }
+                    showEditor(updated)
+                    status?.text = if (cleared.getOrDefault(false)) {
+                        "Saved As and verified · " + file.verifiedBytes + " bytes"
+                    } else {
+                        "Saved As verified · Previous recovery copy retained"
+                    }
+                } else {
+                    dialog("File saved, but recovery tracking failed",
+                        "The new file was written. Old recovery draft was kept: " +
+                            stored.exceptionOrNull()?.message.orEmpty())
+                }
+            }.onFailure {
+                dialog("Save As failed", it.message.orEmpty() +
+                    "\nThe original document and recovery draft were kept.")
+            }
         }
     }
 
