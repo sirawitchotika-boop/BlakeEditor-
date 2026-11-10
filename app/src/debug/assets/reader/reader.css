@@ -20,3 +20,22 @@ table{border-collapse:collapse;display:block;overflow-x:auto}
 td,th{padding:5px 9px;border:1px solid #465267;text-align:left}
 th{background:#293447}
 img{display:none}
+
+html[data-theme="light"]{background:#f6f7fa;color:#202939}
+html[data-theme="light"] h1,html[data-theme="light"] h2{border-color:#cbd5e1}
+html[data-theme="light"] code{background:#e9edf3}
+html[data-theme="light"] pre{background:#e9edf3}
+html[data-theme="light"] blockquote{background:#e8edf5;color:#475569}
+html[data-theme="light"] a{color:#0369a1}
+html[data-theme="light"] td,html[data-theme="light"] th{border-color:#cbd5e1}
+html[data-theme="light"] th{background:#e9edf3}
+html[data-theme="amoled"]{background:#000;color:#fafafa}
+html[data-theme="amoled"] pre,html[data-theme="amoled"] code{background:#141414}
+html[data-theme="amoled"] blockquote{background:#0e0e0e;color:#cbd5e1}
+html[data-theme="eye"]{background:#f2e7cc;color:#493d2c}
+html[data-theme="eye"] h1,html[data-theme="eye"] h2{border-color:#caba9c}
+html[data-theme="eye"] code,html[data-theme="eye"] pre{background:#e5d9bc}
+html[data-theme="eye"] blockquote{background:#e5d9bc;color:#65543e}
+html[data-theme="eye"] a{color:#365f85}
+html[data-theme="eye"] td,html[data-theme="eye"] th{border-color:#caba9c}
+html[data-theme="eye"] th{background:#e5d9bc}

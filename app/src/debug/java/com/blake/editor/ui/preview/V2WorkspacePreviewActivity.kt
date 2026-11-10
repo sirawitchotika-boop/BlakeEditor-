@@ -30,6 +30,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.lifecycle.lifecycleScope
+import com.blake.editor.editor.v2.CodeSyntaxScanner
 import com.blake.editor.file.DecodedTextFile
 import com.blake.editor.file.EncodingDetection
 import com.blake.editor.file.TextEncodingCodec
@@ -72,14 +73,22 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         )
     }
     private val lastChanceSaver = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val displaySettings by lazy { PreviewEditorSettings(this) }
+    private val palette: PreviewPalette get() = displaySettings.palette()
+    private val BG: Int get() = palette.background
+    private val SURFACE: Int get() = palette.surface
+    private val FG: Int get() = palette.foreground
+    private val MUTED: Int get() = palette.secondary
+
 
     private lateinit var root: LinearLayout
-    private var input: TrackedEditText? = null
+    private var input: PreviewCodeEditText? = null
     private var readerWebView: WebView? = null
     private var markdownSourceMode = false
     private var status: TextView? = null
     private var active: RecoveryDraft? = null
     private var autosave: Job? = null
+    private var highlightJob: Job? = null
     private var binding = false
     private var busy = false
 
@@ -150,17 +159,20 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
 
     private fun showHome() {
         autosave?.cancel()
+        highlightJob?.cancel()
         active = null
         input = null
         markdownSourceMode = false
         disposeReaderView()
         root.removeAllViews()
+        root.setBackgroundColor(BG)
         label("Blake Editor 2.0", 23f, FG)
         label("Home · Recovery Preview", 16f, FG)
         label("Save writes to a real file. Store Draft only keeps recovery data.", 12f, MUTED)
         controls(listOf(
             "New File" to { newFile() },
-            "Open File" to { filePicker.launch(arrayOf("*/*")) }
+            "Open File" to { filePicker.launch(arrayOf("*/*")) },
+            "Settings" to { showEditorSettings() }
         ))
         status = label("Loading drafts...", 12f, MUTED)
         val scroll = ScrollView(this)
@@ -211,16 +223,19 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         editMarkdown: Boolean = false) {
         active = draft
         autosave?.cancel()
+        highlightJob?.cancel()
         disposeReaderView()
         markdownSourceMode = editMarkdown
         root.removeAllViews()
+        root.setBackgroundColor(BG)
         label("Blake 2.0 · Document", 21f, FG)
         controls(listOf(
             "Home" to { goHome() },
             "Switch" to { switcher() },
             "Save" to { saveCurrentFile() },
             "Save As" to { beginSaveAs() },
-            "Store Draft" to { storeCurrent() }
+            "Store Draft" to { storeCurrent() },
+            "Settings" to { showEditorSettings() }
         ))
         label(draft.displayName, 18f, FG)
         label("Save updates the file · Store Draft keeps recovery only", 12f, MUTED)
@@ -236,23 +251,26 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             }
         }
         binding = true
-        val field = TrackedEditText(this).apply {
+        val field = PreviewCodeEditText(this).apply {
             setTextColor(FG)
             setHintTextColor(MUTED)
             setBackgroundColor(SURFACE)
             setPadding(dp(12), dp(12), dp(12), dp(12))
             gravity = Gravity.TOP or Gravity.START
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, displaySettings.fontSp.toFloat())
             inputType = android.text.InputType.TYPE_CLASS_TEXT or
                 android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
             setSingleLine(false)
-            setHorizontallyScrolling(false)
+            setHorizontallyScrolling(CodeSyntaxScanner.isCode(draft.language) &&
+                !displaySettings.wrapCode)
             typeface = if (draft.language in listOf("PLAIN_TEXT", "MARKDOWN"))
                 Typeface.DEFAULT else Typeface.MONOSPACE
             hint = "Start writing..."
             setText(draft.content)
             setSelection(draft.selectionStart.coerceIn(0, length()),
                 draft.selectionEnd.coerceIn(0, length()))
+            configureCodeGutter(CodeSyntaxScanner.isCode(draft.language) &&
+                displaySettings.showLineNumbers, palette)
         }
         root.addView(field, LinearLayout.LayoutParams(-1, 0, 1f))
         input = field
@@ -261,11 +279,15 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         field.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: Editable?) { changed() }
+            override fun afterTextChanged(s: Editable?) {
+                changed()
+                scheduleSyntaxHighlight(field, draft.language)
+            }
         })
         field.onSelection = { changed() }
         field.setOnScrollChangeListener { _, _, _, _, _ -> changed() }
         binding = false
+        scheduleSyntaxHighlight(field, draft.language, immediate = true)
         field.post { if (active?.id == draft.id) field.scrollTo(0, draft.scrollY) }
         if (focusKeyboard) {
             field.requestFocus()
@@ -327,13 +349,97 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                     if (readerWebView !== view ||
                         active?.id != draft.id || markdownSourceMode) return
                     val quoted = JSONObject.quote(draft.content)
-                    view?.evaluateJavascript("window.BlakeReader.show(" + quoted + ");", null)
+                    val theme = JSONObject.quote(palette.readerTheme)
+                    view?.evaluateJavascript("window.BlakeReader.setTheme(" + theme +
+                        ");window.BlakeReader.show(" + quoted + ");", null)
                 }
             }
         }
         readerWebView = view
         root.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
         view.loadUrl("https://appassets.androidplatform.net/assets/reader/index.html")
+    }
+
+    private fun scheduleSyntaxHighlight(field: PreviewCodeEditText,
+        language: String, immediate: Boolean = false
+    ) {
+        if (!CodeSyntaxScanner.isCode(language)) return
+        highlightJob?.cancel()
+        val snapshot = field.text?.toString().orEmpty()
+        highlightJob = lifecycleScope.launch {
+            if (!immediate) delay(220L)
+            val result = withContext(Dispatchers.Default) {
+                CodeSyntaxScanner.scan(snapshot, language)
+            }
+            if (field === input && field.text?.toString() == snapshot) {
+                field.applyCodeTokens(result, palette)
+            }
+        }
+    }
+
+    private fun showEditorSettings() {
+        if (busy) return
+        val options = arrayOf(
+            "Theme: " + displaySettings.theme.title,
+            "Font size: " + displaySettings.fontSp + " sp",
+            "Code wrapping: " + if (displaySettings.wrapCode) "On" else "Off",
+            "Code line numbers: " + if (displaySettings.showLineNumbers) "On" else "Off"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Editor Settings")
+            .setItems(options) { _, selected ->
+                when (selected) {
+                    0 -> chooseTheme()
+                    1 -> chooseFontSize()
+                    2 -> {
+                        displaySettings.wrapCode = !displaySettings.wrapCode
+                        refreshAfterSetting()
+                    }
+                    3 -> {
+                        displaySettings.showLineNumbers = !displaySettings.showLineNumbers
+                        refreshAfterSetting()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun chooseTheme() {
+        val choices = PreviewTheme.values()
+        AlertDialog.Builder(this)
+            .setTitle("Theme")
+            .setSingleChoiceItems(choices.map { it.title }.toTypedArray(),
+                choices.indexOf(displaySettings.theme)) { dialog, index ->
+                displaySettings.theme = choices[index]
+                dialog.dismiss()
+                refreshAfterSetting()
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun chooseFontSize() {
+        val choices = intArrayOf(12, 14, 16, 18, 20, 22, 24, 26)
+        val index = choices.indexOf(displaySettings.fontSp).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Editor font size")
+            .setSingleChoiceItems(choices.map { "$it sp" }.toTypedArray(), index
+            ) { dialog, selected ->
+                displaySettings.fontSp = choices[selected]
+                dialog.dismiss()
+                refreshAfterSetting()
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun refreshAfterSetting() {
+        if (active == null) {
+            showHome()
+        } else {
+            val sourceMode = markdownSourceMode
+            afterStored { snapshot ->
+                showEditor(snapshot, editMarkdown = sourceMode)
+            }
+        }
     }
 
     private fun changed() {
@@ -640,7 +746,9 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             "kt", "kts" -> "KOTLIN"
             "py" -> "PYTHON"
             "java" -> "JAVA"
-            "js" -> "JAVASCRIPT"
+            "js", "jsx", "mjs" -> "JAVASCRIPT"
+            "ts", "tsx" -> "TYPESCRIPT"
+            "yaml", "yml" -> "YAML"
             "json" -> "JSON"
             "xml" -> "XML"
             "html" -> "HTML"
@@ -686,17 +794,5 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
     private companion object {
         const val MAX_EDIT_BYTES = 2 * 1024 * 1024
         const val MAX_MARKDOWN_RENDER_CHARS = 300_000
-        val BG = 0xFF151820.toInt()
-        val SURFACE = 0xFF232833.toInt()
-        val FG = 0xFFF1F5F9.toInt()
-        val MUTED = 0xFFBBC6D4.toInt()
-    }
-}
-
-private class TrackedEditText(context: Context) : EditText(context) {
-    var onSelection: (() -> Unit)? = null
-    override fun onSelectionChanged(selStart: Int, selEnd: Int) {
-        super.onSelectionChanged(selStart, selEnd)
-        onSelection?.invoke()
     }
 }

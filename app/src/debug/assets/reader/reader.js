@@ -29,5 +29,12 @@
     }
   }
 
-  window.BlakeReader = { show: show };
+  window.BlakeReader = {
+    show: show,
+    setTheme: function(mode) {
+      const themes = ["light", "dark", "amoled", "eye"];
+      document.documentElement.dataset.theme =
+        themes.includes(mode) ? mode : "dark";
+    }
+  };
 }());
