@@ -14,6 +14,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.blake.editor.file.PagedTextReader
+import com.blake.editor.file.ReaderPageHistory
 import com.blake.editor.file.TextFileEncoding
 import com.blake.editor.file.TextPage
 import kotlinx.coroutines.Dispatchers
@@ -34,8 +35,7 @@ class LargeTextReaderActivity : AppCompatActivity() {
     private lateinit var uri: Uri
     private var encoding = TextFileEncoding.UTF8
     private var currentPage: TextPage? = null
-    private val previousOffsets = ArrayDeque<Long>()
-    private var pageNumber = 1
+    private val history = ReaderPageHistory()
     private var busy = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,19 +89,16 @@ class LargeTextReaderActivity : AppCompatActivity() {
     private fun next() {
         val page = currentPage ?: return
         if (!page.hasMore) return
-        loadPage(page.nextChar) {
-            previousOffsets.addLast(page.startChar)
-            pageNumber++
-        }
+        loadPage(page.nextChar, onSuccess = {
+            history.recordNext(page.startChar)
+        })
     }
 
     private fun previous() {
-        if (previousOffsets.isEmpty()) return
-        val offset = previousOffsets.last()
-        loadPage(offset) {
-            previousOffsets.removeLast()
-            pageNumber--
-        }
+        val offset = history.previousStart() ?: return
+        loadPage(offset, onSuccess = {
+            history.recordPrevious()
+        })
     }
 
     private fun chooseEncoding() {
@@ -113,8 +110,7 @@ class LargeTextReaderActivity : AppCompatActivity() {
                 val former = encoding
                 encoding = selected
                 loadPage(0L, onSuccess = {
-                    previousOffsets.clear()
-                    pageNumber = 1
+                    history.reset()
                 }, onFailure = { encoding = former })
             }
             .setNegativeButton("Cancel", null).show()
@@ -144,17 +140,17 @@ class LargeTextReaderActivity : AppCompatActivity() {
                 onSuccess(page)
                 content.text = if (page.content.isEmpty()) "(End of file)" else page.content
                 scroll.post { scroll.scrollTo(0, 0) }
-                detail.text = "Page " + pageNumber +
+                detail.text = "Page " + history.pageNumber +
                     " · " + encoding.charsetName +
                     " · characters " + page.startChar + "–" + page.nextChar +
                     if (page.hasMore) " · more pages" else " · end"
-                backButton.isEnabled = previousOffsets.isNotEmpty()
+                backButton.isEnabled = history.canGoBack
                 nextButton.isEnabled = page.hasMore
             }.onFailure {
                 onFailure()
                 report("Could not read page: " + it.message +
                     ". Try Encoding if the text uses a different character set.")
-                backButton.isEnabled = previousOffsets.isNotEmpty()
+                backButton.isEnabled = history.canGoBack
                 nextButton.isEnabled = currentPage?.hasMore == true
             }
         }

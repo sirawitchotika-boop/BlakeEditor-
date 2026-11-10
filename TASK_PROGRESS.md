@@ -1,26 +1,31 @@
 # Blake Editor 2.0 — active rebuild
 
-## Hotfix: Large Text Reader startup (2026-11-11)
+## Hotfix: Large Text Reader Previous button (2026-11-11)
 
-Base: main, commit 537cff003d699b723845159cef0e59e3b13e9375
-Working branch: fix/blake-v2-large-reader-no-bom-2026-11-11
+Base: main, commit 2492983e4144e782998e190e21ac3c4cc3be6b13
+Branch: fix/blake-v2-large-reader-previous-2026-11-11
 
-- [x] User supplied Android screenshots: Large Text Reader for large_text_over_2MB.txt displays
-      "Cannot open document: Could not open file" and Next/Previous cannot work.
-- [x] Root cause confirmed: a missing byte-order mark (BOM), normal for UTF-8,
-      returns null and was mistaken for a failed Android file input stream.
-- [x] Treat no BOM as UTF-8; report an error only when the stream really cannot open.
-- [x] Add regression tests for BOM-less Thai/English paging, empty content,
-      and UTF-16 BOM detection.
-- [ ] Verify Android GitHub Actions unit tests and APK build for this hotfix.
-- [ ] User phone test: open the same large TXT, Next, Previous; verify original unchanged.
+- [x] User confirmed large file opens and Next works after PR #6.
+- [x] User reported Previous does not work.
+- [x] Root cause: Kotlin trailing lambda in next()/previous() bound to
+      loadPage()'s last parameter, onFailure, not onSuccess.
+      As a result, the page-history stack stayed empty on successful Next.
+- [x] Use explicit named onSuccess callbacks for both navigation actions.
+- [x] Extract ReaderPageHistory, record only successful navigation, and
+      add JVM tests for forward/back, multi-page ordering, failed reads,
+      and reset after changing encoding.
+- [ ] CI unit tests + APK build: pending.
+- [ ] Android phone test: Next -> Previous -> Next, verify page indicator.
 
-Prior milestones PR #1–#5 are merged. The user reported passing input,
-independent drafts, Save/Save As, encoding, conflict and small-file testing.
-Markdown and large-file phone checks remain incomplete.
+## Existing app safety
 
-The old Blake Editor launcher is unchanged. The large reader remains read-only.
+The Large Text Reader is still read-only and does not write file data.
+The regular Blake Editor launcher, Save, Save As, draft recovery and
+Markdown rendering are unchanged.
+Prior PR #1 through PR #6 are merged. All earlier Save and safety tests
+were user-reported passed; large-file Previous was newly reported failing.
 
 ## Next action
-Run CI on the hotfix PR. If the APK builds, retest the original 4 MB TXT file,
-page navigation and Markdown Reader. Do not merge or release without review.
+
+Review GitHub Actions for the hotfix. Install the new debug APK and verify
+that Next changes to page 2 and Previous returns to page 1.
