@@ -3,33 +3,36 @@
 Objective: implement the approved Blake Editor 2.0 design through reviewable,
 safe milestones, without changing the default branch directly.
 
-Working branch: feature/blake-v2-foundation-2026-11-10
-Base branch: main
-Base commit: f5cd8b715f8512437380b7d771f765fd1e3cc177
+Base: main (foundation PR #1 was merged on 2026-11-10)
+Working branch: feature/blake-v2-independent-drafts-2026-11-10
+Foundation merge commit: f534e4109108060c48ad87df88a25e255514b2e9
 
-## Milestone checklist
+## Milestones
 
-- [x] Inspect current file access, native UI, WebView editor and old draft model.
-- [x] Keep the original app unchanged while adding a debug-only native input lab.
-- [x] Add strict standalone encoding helper and targeted unit tests.
-- [x] Enable CI for pull requests; keep manual builds available.
-- [ ] Check GitHub Actions build and tests. (Not run or unverified until CI confirms.)
-- [ ] Real-device Thai typing and caret tests; compare a native code editor.
-- [ ] Add stable document IDs and independent, atomic recovery drafts with migration.
-- [ ] Integrate lossless encoding/line-ending handling and safe Save/Save As.
-- [ ] Rebuild Home, Workspace, Quick Switcher and balanced Settings.
-- [ ] Add large-file reader, Markdown reading, code tools and final polish.
-- [ ] End-to-end and real-device release verification.
+- [x] Debug-only native Android Input Lab and strict standalone encoding codec.
+- [x] CI for foundation PR #1: unit tests and debug APK build passed.
+- [x] User reported all five device checks passed on 2026-11-10,
+      including Thai caret input, emoji/mixed text, wrapping and V1 save.
+      Device/keyboard details were not supplied.
+- [x] New V2 draft storage code with unique IDs, atomic replacement, stale-save
+      checks, safe revision clearing and non-destructive legacy import.
+- [ ] CI for this branch's V2 draft tests: unverified until workflow succeeds.
+- [ ] Connect V2 storage to a new document manager, Home and Quick Switcher.
+- [ ] Wire encoding and safe Save/Save As to real file I/O.
+- [ ] Large-file reader, Markdown reader, settings, final code editing engine.
+- [ ] Real Android end-to-end tests for independent drafts and recovery.
 
-## Known risks
+## Risk boundaries
 
-- The current app still uses Ace/WebView and a single "untitled" draft slot.
-- Existing code uses UTF-8-only file I/O. The new codec is not integrated yet.
-- GitHub Actions uses online dependency downloads during the build.
-- The native input prototype is not proof of physical cursor alignment.
-- Do not merge the draft PR as a finished Blake Editor 2.0 release.
+- V1 still uses the Ace editor and its old single "untitled" recovery slot.
+- The V2 draft component is isolated and cannot affect V1 data without explicit
+  integration. Legacy data is never deleted during migration.
+- The standalone encoding codec is not yet connected to real-document saving.
+- An Android EditText baseline passed the reported phone tests. The final
+  editor engine is not yet verified.
+- Neither this branch nor the foundation PR is a complete Blake Editor 2.0.
 
 ## Next action
 
-Inspect the PR CI result and install its debug APK on a phone. Record Thai caret
-test results before selecting the final editor engine.
+Review CI for V2 recovery tests; implement the V2 document manager with correct
+"draft stored before navigation" and revision-safe Save semantics.
