@@ -75,12 +75,18 @@ class InputLabActivity : AppCompatActivity() {
             wrapButton.text = if (wrap) "Wrap: On" else "Wrap: Off"
             updateStatus()
         }
-        root.addView(scrollableButtons(listOf(
-            "Font" to { modeButton.performClick() },
-            "Wrap" to { wrapButton.performClick() },
-            "A−" to { changeFontSize(-1) },
-            "A+" to { changeFontSize(1) }
-        )))
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        controls.addView(modeButton)
+        controls.addView(wrapButton)
+        controls.addView(actionButton("A−") { changeFontSize(-1) })
+        controls.addView(actionButton("A+") { changeFontSize(1) })
+        root.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(controls)
+        })
 
         editor = SelectionProbeEditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
