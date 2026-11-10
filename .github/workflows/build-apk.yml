@@ -2,6 +2,7 @@ name: Build Debug APK
 
 on:
   workflow_dispatch:
+  pull_request:
 
 jobs:
   build:
@@ -23,20 +24,21 @@ jobs:
 
       - name: Download Ace Editor Assets
         run: |
+          set -e
           mkdir -p app/src/main/assets/editor/vendor/ace
           ACE_BASE="https://cdnjs.cloudflare.com/ajax/libs/ace/1.44.0"
           for file in ace.js mode-text.js mode-markdown.js mode-kotlin.js mode-javascript.js mode-python.js mode-html.js mode-css.js mode-json.js mode-xml.js theme-twilight.js theme-chrome.js ext-searchbox.js; do
-            curl -sSL "$ACE_BASE/$file" -o "app/src/main/assets/editor/vendor/ace/$file"
+            curl -fSL --retry 3 "$ACE_BASE/$file" -o "app/src/main/assets/editor/vendor/ace/$file"
           done
-          ls -la app/src/main/assets/editor/vendor/ace
 
       - name: Download Markdown Preview Assets
         run: |
+          set -e
           mkdir -p app/src/main/assets/editor/vendor/marked app/src/main/assets/editor/vendor/dompurify
-          curl -sSL "https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js" -o "app/src/main/assets/editor/vendor/marked/marked.min.js" || curl -sSL "https://cdnjs.cloudflare.com/ajax/libs/marked/18.0.7/marked.min.js" -o "app/src/main/assets/editor/vendor/marked/marked.min.js"
-          curl -sSL "https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.15/purify.min.js" -o "app/src/main/assets/editor/vendor/dompurify/purify.min.js"
-          ls -la app/src/main/assets/editor/vendor/marked
-          ls -la app/src/main/assets/editor/vendor/dompurify
+          curl -fSL --retry 3 "https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js" \
+            -o "app/src/main/assets/editor/vendor/marked/marked.min.js"
+          curl -fSL --retry 3 "https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.15/purify.min.js" \
+            -o "app/src/main/assets/editor/vendor/dompurify/purify.min.js"
 
       - name: Ensure Gradle Wrapper
         run: |
