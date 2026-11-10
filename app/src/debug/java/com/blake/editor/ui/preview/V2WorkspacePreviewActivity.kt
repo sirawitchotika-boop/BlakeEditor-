@@ -251,7 +251,10 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             }
         }
         binding = true
-        val field = PreviewCodeEditText(this).apply {
+        // Keep recoverable documents accessible if a future custom view fails
+        // while being constructed. Do not let the preview crash or delete drafts.
+        val field = try {
+            PreviewCodeEditText(this).apply {
             setTextColor(FG)
             setHintTextColor(MUTED)
             setBackgroundColor(SURFACE)
@@ -271,6 +274,13 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 draft.selectionEnd.coerceIn(0, length()))
             configureCodeGutter(CodeSyntaxScanner.isCode(draft.language) &&
                 displaySettings.showLineNumbers, palette)
+            }
+        } catch (failure: RuntimeException) {
+            showHome()
+            dialog("Could not open editor",
+                "The file and recovery draft were kept. " +
+                    failure.javaClass.simpleName + ": " + failure.message.orEmpty())
+            return
         }
         root.addView(field, LinearLayout.LayoutParams(-1, 0, 1f))
         input = field
