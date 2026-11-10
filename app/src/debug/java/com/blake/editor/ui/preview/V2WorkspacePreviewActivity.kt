@@ -423,7 +423,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
     }
 
     private fun label(value: String, sp: Float, color: Int): TextView =
-        text(value, sp, color).also(root::addView)
+        text(value, sp, color).also { root.addView(it) }
 
     private fun text(value: String, sp: Float, color: Int): TextView =
         TextView(this).apply {
