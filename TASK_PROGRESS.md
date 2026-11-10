@@ -1,29 +1,26 @@
 # Blake Editor 2.0 — active rebuild
 
-## Confirmed milestones
-- [x] Foundation PR #1 merged; Thai native Input Lab and strict codec.
-- [x] Recovery PR #2 merged; independent drafts and safe migration.
-- [x] Home/Quick Switcher PR #3 merged; user reports 5/5 phone checks passed.
-- [x] Save/Save As PR #4 merged; user reports 4/4 phone checks passed.
-- [x] User reports additional legacy Thai encoding and external-conflict
-      safety checks A/B passed (recorded in PR #4, 2026-11-11).
-- [x] Debug-only Markdown Reader and read-only large-file paging code added.
-- [ ] CI tests + APK build for current PR not yet verified.
-- [ ] Milestone 5 real-device Markdown/large-file verification not yet tested.
-- [ ] Production V2, large-file index/search, full Markdown image/link
-      handling, polished settings, code tools and final device checks pending.
+## Hotfix: Large Text Reader startup (2026-11-11)
 
-Working branch: feature/blake-v2-reader-large-files-2026-11-11
-Base: main f527ee33a97511f758490df680f38e15dc2cc87b
+Base: main, commit 537cff003d699b723845159cef0e59e3b13e9375
+Working branch: fix/blake-v2-large-reader-no-bom-2026-11-11
 
-## Known limitations
-The old Blake Editor launcher and its data are untouched.
-Markdown reading is available in the debug Blake 2.0 Preview only.
-Large files over 2 MiB are read-only in bounded 16k-character pages.
-Non-seekable providers may reread earlier content on later pages.
-Markdown formatting has a 300k-character limit. Large Markdown is not fully
-formatted/paged yet.
+- [x] User supplied Android screenshots: Large Text Reader for large_text_over_2MB.txt displays
+      "Cannot open document: Could not open file" and Next/Previous cannot work.
+- [x] Root cause confirmed: a missing byte-order mark (BOM), normal for UTF-8,
+      returns null and was mistaken for a failed Android file input stream.
+- [x] Treat no BOM as UTF-8; report an error only when the stream really cannot open.
+- [x] Add regression tests for BOM-less Thai/English paging, empty content,
+      and UTF-16 BOM detection.
+- [ ] Verify Android GitHub Actions unit tests and APK build for this hotfix.
+- [ ] User phone test: open the same large TXT, Next, Previous; verify original unchanged.
+
+Prior milestones PR #1–#5 are merged. The user reported passing input,
+independent drafts, Save/Save As, encoding, conflict and small-file testing.
+Markdown and large-file phone checks remain incomplete.
+
+The old Blake Editor launcher is unchanged. The large reader remains read-only.
 
 ## Next action
-Verify GitHub Actions, then test Markdown read/source switching, Unicode
-recovery, 2 MiB+ page navigation, and existing Save/Save As on Android.
+Run CI on the hotfix PR. If the APK builds, retest the original 4 MB TXT file,
+page navigation and Markdown Reader. Do not merge or release without review.

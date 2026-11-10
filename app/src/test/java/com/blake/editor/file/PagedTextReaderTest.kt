@@ -9,6 +9,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PagedTextReaderTest {
+    @Test fun bomlessUtf8FileOpensUsingDefaultEncoding() {
+        val bytes = "Page 1: hello สวัสดีครับ\nPage 2: end".toByteArray(Charsets.UTF_8)
+        assertEquals(TextFileEncoding.UTF8,
+            PagedTextReader.initialEncoding(ByteArrayInputStream(bytes)))
+        val first = PagedTextReader.readPage(ByteArrayInputStream(bytes),
+            TextFileEncoding.UTF8, 0, 12)
+        assertTrue(first.content.isNotEmpty())
+        assertTrue(first.hasMore)
+        val next = PagedTextReader.readPage(ByteArrayInputStream(bytes),
+            TextFileEncoding.UTF8, first.nextChar, 12)
+        assertTrue(next.content.isNotEmpty())
+    }
+
+    @Test fun bomlessEmptyFileUsesUtf8RatherThanReportingCannotOpen() {
+        assertEquals(TextFileEncoding.UTF8,
+            PagedTextReader.initialEncoding(ByteArrayInputStream(byteArrayOf())))
+    }
+
+    @Test fun markedUtf16StillUsesBomEncoding() {
+        val bytes = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) +
+            "Hello".toByteArray(Charsets.UTF_16LE)
+        assertEquals(TextFileEncoding.UTF16_LE,
+            PagedTextReader.initialEncoding(ByteArrayInputStream(bytes)))
+    }
+
     @Test fun pagesReassembleThaiEnglishAndEmoji() {
         val original = "ABC สวัสดีครับ 🌍\r\nSecond line\nThird"
         val bytes = original.toByteArray(Charsets.UTF_8)

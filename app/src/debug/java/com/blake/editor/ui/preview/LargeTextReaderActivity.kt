@@ -72,14 +72,15 @@ class LargeTextReaderActivity : AppCompatActivity() {
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
         lifecycleScope.launch {
-            val bom = withContext(Dispatchers.IO) {
+            val firstEncoding = withContext(Dispatchers.IO) {
                 runCatching {
-                    contentResolver.openInputStream(uri)?.use(PagedTextReader::sniffBom)
-                        ?: error("Could not open file")
+                    val stream = contentResolver.openInputStream(uri)
+                        ?: error("Storage provider could not open the document")
+                    PagedTextReader.initialEncoding(stream)
                 }
             }
-            bom.onSuccess { detected ->
-                encoding = detected ?: TextFileEncoding.UTF8
+            firstEncoding.onSuccess { detected ->
+                encoding = detected
                 loadPage(0L)
             }.onFailure { report("Cannot open document: " + it.message) }
         }
