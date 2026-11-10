@@ -1,28 +1,29 @@
 # Blake Editor 2.0 — active rebuild
 
-## Confirmed work
-- [x] Foundation PR #1 merged; native EditText input and strict codec.
-- [x] Draft recovery PR #2 merged; independent atomic drafts and migration.
-- [x] Workspace PR #3 merged; Home and Quick Switcher preview.
-- [x] User reports all five Workspace Preview phone tests passed on 2026-11-10.
-- [x] Previous PRs' GitHub Actions unit tests and APK builds passed.
-- [x] Implemented debug-only Save and Save As preview with strict encoding,
-      source fingerprint validation, original backups and verified read-back.
-- [ ] CI verification for new Save PR (pending).
-- [ ] Real-phone Save/Save As tests (pending).
-- [ ] Full production V2 app, Recent Files persistence, Markdown reader,
-      large-file streaming, theme customization and code editing tools.
+## Confirmed milestones
+- [x] Foundation PR #1 merged; Thai native Input Lab and strict codec.
+- [x] Recovery PR #2 merged; independent drafts and safe migration.
+- [x] Home/Quick Switcher PR #3 merged; user reports 5/5 phone checks passed.
+- [x] Save/Save As PR #4 merged; user reports 4/4 phone checks passed.
+- [x] User reports additional legacy Thai encoding and external-conflict
+      safety checks A/B passed (recorded in PR #4, 2026-11-11).
+- [x] Debug-only Markdown Reader and read-only large-file paging code added.
+- [ ] CI tests + APK build for current PR not yet verified.
+- [ ] Milestone 5 real-device Markdown/large-file verification not yet tested.
+- [ ] Production V2, large-file index/search, full Markdown image/link
+      handling, polished settings, code tools and final device checks pending.
 
-Working branch: feature/blake-v2-safe-save-2026-11-10
-Base main: 196593d6029e27f225b22b83dbce15ca17e31e2c
+Working branch: feature/blake-v2-reader-large-files-2026-11-11
+Base: main f527ee33a97511f758490df680f38e15dc2cc87b
 
-## Safety limitations
-Debug-only Blake 2.0 Preview now has explicit file-writing buttons.
-Backups are retained when overwrite verification fails. Android file providers
-can behave differently; use disposable test copies. No update to the main
-Blake Editor launcher is included. Older drafts lacking file fingerprints
-cannot overwrite originals until safely reopened or saved as new files.
+## Known limitations
+The old Blake Editor launcher and its data are untouched.
+Markdown reading is available in the debug Blake 2.0 Preview only.
+Large files over 2 MiB are read-only in bounded 16k-character pages.
+Non-seekable providers may reread earlier content on later pages.
+Markdown formatting has a 300k-character limit. Large Markdown is not fully
+formatted/paged yet.
 
 ## Next action
-Verify this PR in GitHub Actions and test Save/Save As on an Android phone,
-including cancel, encoding mismatch, and external-file conflict behavior.
+Verify GitHub Actions, then test Markdown read/source switching, Unicode
+recovery, 2 MiB+ page navigation, and existing Save/Save As on Android.

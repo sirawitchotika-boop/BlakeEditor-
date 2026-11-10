@@ -8,6 +8,11 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
@@ -23,6 +28,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebViewAssetLoader
 import androidx.lifecycle.lifecycleScope
 import com.blake.editor.file.DecodedTextFile
 import com.blake.editor.file.EncodingDetection
@@ -42,6 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import org.json.JSONObject
 
 /**
  * Isolated DEBUG ONLY preview. Original files change ONLY after an explicit
@@ -68,6 +75,8 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
 
     private lateinit var root: LinearLayout
     private var input: TrackedEditText? = null
+    private var readerWebView: WebView? = null
+    private var markdownSourceMode = false
     private var status: TextView? = null
     private var active: RecoveryDraft? = null
     private var autosave: Job? = null
@@ -143,6 +152,8 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         autosave?.cancel()
         active = null
         input = null
+        markdownSourceMode = false
+        disposeReaderView()
         root.removeAllViews()
         label("Blake Editor 2.0", 23f, FG)
         label("Home · Recovery Preview", 16f, FG)
@@ -196,9 +207,12 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
     }
 
-    private fun showEditor(draft: RecoveryDraft, focusKeyboard: Boolean = false) {
+    private fun showEditor(draft: RecoveryDraft, focusKeyboard: Boolean = false,
+        editMarkdown: Boolean = false) {
         active = draft
         autosave?.cancel()
+        disposeReaderView()
+        markdownSourceMode = editMarkdown
         root.removeAllViews()
         label("Blake 2.0 · Document", 21f, FG)
         controls(listOf(
@@ -210,6 +224,17 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         ))
         label(draft.displayName, 18f, FG)
         label("Save updates the file · Store Draft keeps recovery only", 12f, MUTED)
+        if (draft.language == "MARKDOWN") {
+            controls(listOf((if (editMarkdown) "Reader" else "Edit Source") to {
+                toggleMarkdownMode()
+            }))
+            if (!editMarkdown) {
+                input = null
+                status = label("Offline Markdown Reader · Read mode", 12f, MUTED)
+                showMarkdownReader(draft)
+                return
+            }
+        }
         binding = true
         val field = TrackedEditText(this).apply {
             setTextColor(FG)
@@ -249,6 +274,66 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                     .showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
             }
         } else field.clearFocus()
+    }
+
+    private fun toggleMarkdownMode() {
+        if (active?.language != "MARKDOWN") return
+        val nextSourceMode = !markdownSourceMode
+        afterStored { snapshot ->
+            showEditor(snapshot, focusKeyboard = nextSourceMode,
+                editMarkdown = nextSourceMode)
+        }
+    }
+
+    private fun disposeReaderView() {
+        readerWebView?.let { view ->
+            root.removeView(view)
+            view.destroy()
+        }
+        readerWebView = null
+    }
+
+    @android.annotation.SuppressLint("SetJavaScriptEnabled")
+    private fun showMarkdownReader(draft: RecoveryDraft) {
+        // Keep very large Markdown in source/edit mode until incremental
+        // formatting is available, rather than blocking WebView on rendering.
+        if (draft.content.length > MAX_MARKDOWN_RENDER_CHARS) {
+            status?.text = "This Markdown is too large to format safely; tap Edit Source."
+            root.addView(text("Markdown preview limited to 300,000 characters.", 15f, MUTED))
+            return
+        }
+        val loader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+        val view = WebView(this).apply {
+            setBackgroundColor(BG)
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = false
+                allowFileAccess = false
+                allowContentAccess = false
+                blockNetworkLoads = true
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            }
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView,
+                    request: WebResourceRequest): WebResourceResponse? =
+                    loader.shouldInterceptRequest(request.url)
+
+                override fun shouldOverrideUrlLoading(view: WebView,
+                    request: WebResourceRequest): Boolean = true
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    if (readerWebView !== view ||
+                        active?.id != draft.id || markdownSourceMode) return
+                    val quoted = JSONObject.quote(draft.content)
+                    view?.evaluateJavascript("window.BlakeReader.show(" + quoted + ");", null)
+                }
+            }
+        }
+        readerWebView = view
+        root.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
+        view.loadUrl("https://appassets.androidplatform.net/assets/reader/index.html")
     }
 
     private fun changed() {
@@ -371,12 +456,18 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                         } catch (_: SecurityException) { /* Drafts work without persisted grant. */ }
                     }
                     val name = displayName(uri)
-                    val bytes = readSmallFile(uri)
+                    val length = documentSize(uri)
+                    val bytes = if (length != null && length > MAX_EDIT_BYTES) null
+                        else readSmallFile(uri)
                     Pair(name, bytes)
                 }
             }
             busy = false
             result.onSuccess { (name, bytes) ->
+                if (bytes == null) {
+                    showLargeReader(uri)
+                    return@onSuccess
+                }
                 when (val found = TextEncodingCodec.detect(bytes)) {
                     is EncodingDetection.Ready -> addOpenedFile(uri, name, found.document, bytes)
                     is EncodingDetection.ChooseEncoding -> {
@@ -396,8 +487,11 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                         dialog("Cannot open safely", found.reason)
                 }
             }.onFailure {
-                dialog("Could not read file", it.message.orEmpty() +
-                    "\nLarge-file reading is a later milestone.")
+                if (it is FileTooLargeForEditor) {
+                    showLargeReader(uri)
+                } else {
+                    dialog("Could not read file", it.message.orEmpty())
+                }
             }
         }
     }
@@ -502,13 +596,30 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 val n = stream.read(buffer)
                 if (n < 0) break
                 if (n == 0) continue
-                require(output.size() + n <= 2 * 1024 * 1024) {
-                    "File exceeds the preview's 2 MB limit"
-                }
+                if (output.size() + n > MAX_EDIT_BYTES) throw FileTooLargeForEditor()
                 output.write(buffer, 0, n)
             }
             return output.toByteArray()
         }
+    }
+
+    private fun showLargeReader(uri: Uri) {
+        status?.text = "Opening read-only large file viewer"
+        startActivity(Intent(this, LargeTextReaderActivity::class.java).apply {
+            data = uri
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        })
+    }
+
+    private fun documentSize(uri: Uri): Long? {
+        contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+            ?.use { cursor ->
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && cursor.moveToFirst() && !cursor.isNull(index)) {
+                    return cursor.getLong(index).takeIf { it >= 0 }
+                }
+            }
+        return null
     }
 
     private fun displayName(uri: Uri): String {
@@ -569,7 +680,12 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density + .5f).toInt()
 
+    private class FileTooLargeForEditor :
+        IllegalArgumentException("File exceeds the 2 MB editable preview limit")
+
     private companion object {
+        const val MAX_EDIT_BYTES = 2 * 1024 * 1024
+        const val MAX_MARKDOWN_RENDER_CHARS = 300_000
         val BG = 0xFF151820.toInt()
         val SURFACE = 0xFF232833.toInt()
         val FG = 0xFFF1F5F9.toInt()
