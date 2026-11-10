@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <!-- Only the debug APK gets this separate test launcher. Release stays unchanged. -->
         <activity
             android:name=".ui.lab.InputLabActivity"
             android:exported="true"
             android:label="Blake Input Lab">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ui.preview.V2WorkspacePreviewActivity"
+            android:exported="true"
+            android:label="Blake 2.0 Preview">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
