@@ -22,6 +22,21 @@ class CodeLineIndexTest {
         assertEquals(3, index.lineAt(4))
         assertTrue(index.isLogicalLineStart(4))
     }
+    @Test fun immediateRepeatedTextRebuildsKeepLineStateValid() {
+        // Plain Kotlin coverage; Android constructor callback ordering still
+        // requires an on-device smoke test of PreviewCodeEditText.
+        val index = CodeLineIndex()
+        index.rebuild("")
+        index.rebuild("val answer = 42")
+        assertEquals(1, index.lineCount)
+        index.rebuild("val text = \"สวัสดีครับ 🌏\"\nreturn text")
+        assertEquals(2, index.lineCount)
+        assertEquals(2, index.lineAt(
+            "val text = \"สวัสดีครับ 🌏\"\nreturn text".indexOf("return")))
+        index.rebuild("again")
+        assertEquals(1, index.lineCount)
+    }
+
     @Test fun emptyFileHasFirstLine() {
         val index = CodeLineIndex()
         index.rebuild("")

@@ -18,7 +18,10 @@ import com.blake.editor.editor.v2.CodeTokenKind
 class PreviewCodeEditText(context: Context) : EditText(context) {
     var onSelection: (() -> Unit)? = null
 
-    private val lines = CodeLineIndex()
+    // Android TextView may dispatch onTextChanged from its superclass
+    // constructor, before Kotlin subclass fields have been initialized.
+    // Keep this nullable and create it only after super construction finishes.
+    private var lines: CodeLineIndex? = null
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val gutterPaint = Paint()
     private val tokenSpans = mutableListOf<ForegroundColorSpan>()
@@ -27,6 +30,10 @@ class PreviewCodeEditText(context: Context) : EditText(context) {
     private var lineNumbersEnabled = false
     private var gutterColor: Int = 0xFF1A202A.toInt()
     private var numberColor: Int = 0xFF8298AC.toInt()
+
+    init {
+        lines = CodeLineIndex().also { it.rebuild(text ?: "") }
+    }
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
@@ -37,8 +44,9 @@ class PreviewCodeEditText(context: Context) : EditText(context) {
         lengthAfter: Int
     ) {
         super.onTextChanged(text, start, lengthBefore, lengthAfter)
-        lines.rebuild(text ?: "")
-        invalidate()
+        // During EditText superclass construction, lines is still null.
+        lines?.rebuild(text ?: "")
+        if (lines != null) invalidate()
     }
 
     fun configureCodeGutter(show: Boolean, palette: PreviewPalette) {
@@ -56,7 +64,7 @@ class PreviewCodeEditText(context: Context) : EditText(context) {
         setPadding(if (show) gutterWidth + dp(12) else dp(12),
             top, userRight, bottom)
         if (leftBefore != paddingLeft) requestLayout()
-        lines.rebuild(text ?: "")
+        lines?.rebuild(text ?: "")
         invalidate()
     }
 
@@ -81,7 +89,8 @@ class PreviewCodeEditText(context: Context) : EditText(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
-        if (lineNumbersEnabled) {
+        val lineIndex = lines
+        if (lineNumbersEnabled && lineIndex != null) {
             val textLayout = layout
             val displayHeight = height
             if (textLayout != null && displayHeight > 0) {
@@ -98,8 +107,8 @@ class PreviewCodeEditText(context: Context) : EditText(context) {
                 )
                 for (visual in first..last) {
                     val start = textLayout.getLineStart(visual)
-                    if (!lines.isLogicalLineStart(start)) continue
-                    val number = lines.lineAt(start).toString()
+                    if (!lineIndex.isLogicalLineStart(start)) continue
+                    val number = lineIndex.lineAt(start).toString()
                     val x = scrollX + gutterWidth - gap -
                         linePaint.measureText(number)
                     val baseline = textLayout.getLineBaseline(visual) +
