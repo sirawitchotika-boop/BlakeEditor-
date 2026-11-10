@@ -32,6 +32,13 @@ object PagedTextReader {
             detectBom(prefix, n)
         }
 
+    /**
+     * A missing BOM is normal for UTF-8 text. Do not confuse a null BOM
+     * result with a failed input stream and reject an otherwise readable file.
+     */
+    fun initialEncoding(input: InputStream): TextFileEncoding =
+        sniffBom(input) ?: TextFileEncoding.UTF8
+
     fun readPage(
         input: InputStream,
         encoding: TextFileEncoding,
