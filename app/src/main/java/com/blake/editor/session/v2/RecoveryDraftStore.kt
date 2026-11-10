@@ -29,13 +29,26 @@ data class RecoveryDraft(
     val selectionEnd: Int = 0,
     val scrollY: Int = 0,
     val revision: Long = 1,
-    val updatedAtMs: Long = System.currentTimeMillis()
+    val updatedAtMs: Long = System.currentTimeMillis(),
+    val sourceEncoding: String? = null,
+    val sourceHadBom: Boolean = false,
+    val sourceSha256: String? = null,
+    val savedToDisk: Boolean = false
 ) {
     init {
         require(displayName.isNotBlank()) { "Display name must not be blank" }
         require(selectionStart >= 0 && selectionEnd >= 0) { "Invalid selection" }
         require(scrollY >= 0) { "Invalid scroll" }
         require(revision > 0) { "Revision must be positive" }
+        require(sourceSha256 == null || Regex("[0-9a-f]{64}").matches(sourceSha256)) {
+            "Invalid source fingerprint"
+        }
+        require(sourceEncoding == null || sourceEncoding in setOf(
+            "UTF8", "UTF16_LE", "UTF16_BE", "WINDOWS_874", "TIS_620"
+        )) { "Unsupported recorded encoding" }
+        if (savedToDisk) require(sourceUri != null && sourceSha256 != null && sourceEncoding != null) {
+            "Saved document must have verified file metadata"
+        }
         if (sourceUri == null) {
             require(id.value.startsWith("new-")) { "Untitled document needs an untitled ID" }
         } else {
@@ -59,7 +72,7 @@ data class LegacyMigrationReport(
 class RecoveryDraftStore(private val directory: File) {
     private companion object {
         const val MAGIC = 0x424C4B32 // BLK2
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
         const val MAX_METADATA_BYTES = 8192
         const val MAX_CONTENT_BYTES = 32 * 1024 * 1024
         const val MAX_FILE_BYTES = MAX_CONTENT_BYTES + MAX_METADATA_BYTES * 4
@@ -245,6 +258,10 @@ class RecoveryDraftStore(private val directory: File) {
             require(content.size <= MAX_CONTENT_BYTES) { "Recovery draft exceeds safe editing size" }
             out.writeInt(content.size)
             out.write(content)
+            out.writeShortString(draft.sourceEncoding.orEmpty())
+            out.writeBoolean(draft.sourceHadBom)
+            out.writeShortString(draft.sourceSha256.orEmpty())
+            out.writeBoolean(draft.savedToDisk)
         }
         return bytes.toByteArray()
     }
@@ -252,7 +269,8 @@ class RecoveryDraftStore(private val directory: File) {
     private fun deserialize(bytes: ByteArray): RecoveryDraft =
         DataInputStream(ByteArrayInputStream(bytes)).use { input ->
             require(input.readInt() == MAGIC) { "Unrecognized draft format" }
-            require(input.readInt() == FORMAT_VERSION) { "Unsupported draft version" }
+            val version = input.readInt()
+            require(version == 1 || version == FORMAT_VERSION) { "Unsupported draft version" }
             val id = DocumentIdentity.fromStored(input.readShortString())
             val uri = if (input.readBoolean()) input.readShortString() else null
             val name = input.readShortString()
@@ -266,13 +284,18 @@ class RecoveryDraftStore(private val directory: File) {
             require(length in 0..MAX_CONTENT_BYTES) { "Invalid text size" }
             val contentBytes = ByteArray(length)
             input.readFully(contentBytes)
+            val sourceEncoding = if (version >= 2) input.readShortString().ifBlank { null } else null
+            val sourceHadBom = if (version >= 2) input.readBoolean() else false
+            val sourceHash = if (version >= 2) input.readShortString().ifBlank { null } else null
+            val savedToDisk = if (version >= 2) input.readBoolean() else false
             require(input.read() == -1) { "Unexpected trailing data" }
             val decoder = Charsets.UTF_8.newDecoder()
                 .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                 .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
             val content = decoder.decode(java.nio.ByteBuffer.wrap(contentBytes)).toString()
             RecoveryDraft(id, uri, name, language, content, selectionStart, selectionEnd,
-                scrollY, revision, updatedAt)
+                scrollY, revision, updatedAt, sourceEncoding, sourceHadBom,
+                sourceHash, savedToDisk)
         }
 
     private fun DataOutputStream.writeShortString(s: String) {
