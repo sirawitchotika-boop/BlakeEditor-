@@ -2,6 +2,11 @@ package com.blake.editor.ui.main
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.view.View
 import android.webkit.WebView
 import android.widget.Button
@@ -19,7 +24,9 @@ import com.blake.editor.R
 import com.blake.editor.core.model.ThemeMode
 import com.blake.editor.editor.EditorCommand
 import com.blake.editor.editor.EditorController
-import com.blake.editor.editor.EditorContentSyncGuard
+import com.blake.editor.editor.NativeDocumentSyncGuard
+import com.blake.editor.editor.NativeInputEditText
+import com.blake.editor.editor.NativeUndoHistory
 import com.blake.editor.editor.EditorEvent
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
@@ -58,6 +65,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var tvEditorInfo: TextView
     private lateinit var webViewEditor: WebView
+    private lateinit var nativeEditor: NativeInputEditText
+    private val documentSync = NativeDocumentSyncGuard()
+    private val nativeUndo = NativeUndoHistory()
+    private var applyingExternalText = false
 
     private lateinit var btnNew: Button
     private lateinit var btnOpen: Button
@@ -68,7 +79,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTheme: Button
     private lateinit var btnPreview: Button
 
-    private val contentSync = EditorContentSyncGuard()
     private var lastAppliedTheme: ThemeMode? = null
     private var lastPreviewState: Boolean? = null
 
@@ -94,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         btnPreview = findViewById(R.id.btnPreview)
 
         EdgeToEdgeController.setupWindowInsets(rootContainer)
+        setupNativeEditor()
         setupEditor()
         setupListeners()
         setupBackNavigation()
@@ -131,40 +142,83 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Android native text owns the input connection. Ace/WebView is used
+     * only for the offline formatted preview, not for live keyboard input.
+     */
+    private fun setupNativeEditor() {
+        val holder = webViewEditor.parent as LinearLayout
+        val position = holder.indexOfChild(webViewEditor)
+        nativeEditor = NativeInputEditText(this)
+        holder.addView(nativeEditor, position, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
+        webViewEditor.visibility = View.GONE
+
+        nativeEditor.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int,
+                count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int,
+                before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (applyingExternalText) return
+                val content = s?.toString().orEmpty()
+                nativeUndo.edited(content, SystemClock.uptimeMillis())
+                viewModel.onContentChanged(content)
+            }
+        })
+        nativeEditor.onCursorMoved = { line, col ->
+            if (!applyingExternalText) {
+                viewModel.onCursorPositionChanged(line, col)
+            }
+        }
+    }
+
+    private fun loadNativeDocument(state: MainUiState) {
+        // StateFlow emits after every key/cursor move. NEVER call setText
+        // for those echoes: it breaks Thai composing text and caret position.
+        if (!documentSync.shouldLoad(state.documentGeneration)) return
+        applyingExternalText = true
+        try {
+            nativeEditor.setText(state.content)
+            val offset = NativeDocumentSyncGuard.offsetForLineColumn(
+                state.content, state.cursorLine, state.cursorColumn
+            )
+            nativeEditor.setSelection(offset)
+            nativeEditor.scrollTo(0, 0)
+            nativeUndo.reset(state.content)
+        } finally {
+            applyingExternalText = false
+        }
+    }
+
+    private fun applyUndoOrRedo(content: String?) {
+        if (content == null || viewModel.uiState.value.isPreviewing) return
+        applyingExternalText = true
+        try {
+            val offset = nativeEditor.selectionStart.coerceAtLeast(0)
+            nativeEditor.setText(content)
+            nativeEditor.setSelection(offset.coerceAtMost(content.length))
+        } finally {
+            applyingExternalText = false
+        }
+        viewModel.onContentChanged(content)
+    }
+
     private fun setupEditor() {
         editorController = EditorController(webViewEditor) { event ->
             when (event) {
                 is EditorEvent.EditorReady -> {
                     val state = viewModel.uiState.value
-                    if (contentSync.shouldApplyNativeContent(state.content)) {
-                        editorController.execute(
-                            EditorCommand.SetContent(state.content, state.syntaxMode)
-                        )
-                    }
-                    editorController.execute(
-                        EditorCommand.SetTheme(viewModel.uiState.value.themeMode)
-                    )
-                    if (viewModel.uiState.value.isPreviewing) {
-                        editorController.execute(EditorCommand.ShowPreview(viewModel.uiState.value.content))
-                    } else if (viewModel.uiState.value.cursorLine > 1) {
-                        editorController.execute(EditorCommand.GoToLine(viewModel.uiState.value.cursorLine))
+                    editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                    if (state.isPreviewing) {
+                        editorController.execute(EditorCommand.ShowPreview(state.content))
                     }
                 }
-                is EditorEvent.ContentChanged -> {
-                    // The text already lives in Ace; never echo its own edits
-                    // into SetContent because that resets caret, undo and IME.
-                    contentSync.onWebEditorChanged(event.text)
-                    viewModel.onContentChanged(event.text)
-                }
-                is EditorEvent.CursorPositionChanged -> {
-                    viewModel.onCursorPositionChanged(event.line, event.column)
-                }
-                is EditorEvent.ScrollChanged -> {
-                    viewModel.onScrollPositionChanged(event.scrollY)
-                }
-                is EditorEvent.ContentDelivered -> {
-                    // Response to RequestContent
-                }
+                is EditorEvent.ContentChanged,
+                is EditorEvent.CursorPositionChanged,
+                is EditorEvent.ScrollChanged,
+                is EditorEvent.ContentDelivered -> Unit
             }
         }
     }
@@ -204,13 +258,9 @@ class MainActivity : AppCompatActivity() {
             createDocumentLauncher.launch(viewModel.uiState.value.fileName)
         }
 
-        btnUndo.setOnClickListener {
-            editorController.execute(EditorCommand.Undo)
-        }
+        btnUndo.setOnClickListener { applyUndoOrRedo(nativeUndo.undo()) }
 
-        btnRedo.setOnClickListener {
-            editorController.execute(EditorCommand.Redo)
-        }
+        btnRedo.setOnClickListener { applyUndoOrRedo(nativeUndo.redo()) }
 
         btnTheme.setOnClickListener {
             showThemeSelectionDialog()
@@ -271,8 +321,10 @@ class MainActivity : AppCompatActivity() {
                     tvFileName.text = "${state.fileName}$dirtyIndicator"
                     tvStatus.text = state.statusMessage
 
-                    val modeText = if (state.isPreviewing) "Preview" else state.syntaxMode.displayName
+                    val modeText = if (state.isPreviewing) "Preview"
+                        else state.syntaxMode.displayName + " · Native"
                     tvEditorInfo.text = "Ln ${state.cursorLine}, Col ${state.cursorColumn} | $modeText"
+                    loadNativeDocument(state)
 
                     // Theme switching
                     if (state.themeMode != lastAppliedTheme) {
@@ -281,9 +333,11 @@ class MainActivity : AppCompatActivity() {
                         editorController.execute(EditorCommand.SetTheme(state.themeMode))
                     }
 
-                    // Preview mode toggle sync
+                    // The WebView never owns the live keyboard.
                     if (state.isPreviewing != lastPreviewState) {
                         lastPreviewState = state.isPreviewing
+                        nativeEditor.visibility = if (state.isPreviewing) View.GONE else View.VISIBLE
+                        webViewEditor.visibility = if (state.isPreviewing) View.VISIBLE else View.GONE
                         if (state.isPreviewing) {
                             btnPreview.text = getString(R.string.action_edit)
                             btnUndo.isEnabled = false
@@ -301,15 +355,6 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    // Content sync
-                    if (contentSync.shouldApplyNativeContent(state.content)) {
-                        editorController.execute(EditorCommand.SetContent(state.content, state.syntaxMode))
-                        if (state.isPreviewing) {
-                            editorController.execute(EditorCommand.ShowPreview(state.content))
-                        } else if (state.cursorLine > 1) {
-                            editorController.execute(EditorCommand.GoToLine(state.cursorLine))
-                        }
-                    }
                 }
             }
         }
@@ -324,6 +369,8 @@ class MainActivity : AppCompatActivity() {
         fileBar.setBackgroundColor(palette.surfaceColor)
         tvStatus.setBackgroundColor(palette.surfaceColor)
         webViewEditor.setBackgroundColor(palette.backgroundColor)
+        nativeEditor.setBackgroundColor(palette.backgroundColor)
+        nativeEditor.setTextColor(palette.primaryTextColor)
 
         tvFileName.setTextColor(palette.primaryTextColor)
         tvEditorInfo.setTextColor(palette.secondaryTextColor)
