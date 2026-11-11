@@ -1,6 +1,7 @@
 package com.blake.editor.ui.preview
 
 import android.net.Uri
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.TypedValue
@@ -33,6 +34,7 @@ class LargeTextReaderActivity : AppCompatActivity() {
     private lateinit var nextButton: Button
     private lateinit var scroll: ScrollView
     private lateinit var uri: Uri
+    private val palette by lazy { PreviewEditorSettings(this).palette() }
     private var encoding = TextFileEncoding.UTF8
     private var currentPage: TextPage? = null
     private val history = ReaderPageHistory()
@@ -47,12 +49,13 @@ class LargeTextReaderActivity : AppCompatActivity() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(12), dp(10), dp(10))
-            setBackgroundColor(0xFF151820.toInt())
+            setBackgroundColor(palette.background)
         }
         setContentView(root)
-        root.addView(label("Large Text Reader", 22f, 0xFFF1F5F9.toInt()))
-        root.addView(label("READ ONLY · Never changes your file", 13f, 0xFFB7C5D5.toInt()))
-        root.addView(label(fileName(), 16f, 0xFFF1F5F9.toInt()))
+        PreviewSystemBars.install(this, root, palette.background)
+        root.addView(label("Large Text Reader", 21f, palette.foreground))
+        root.addView(label("READ ONLY · Never changes your file", 13f, palette.secondary))
+        root.addView(label(fileName(), 16f, palette.foreground))
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         backButton = button("Previous") { previous() }
@@ -61,10 +64,10 @@ class LargeTextReaderActivity : AppCompatActivity() {
         actions.addView(nextButton)
         actions.addView(button("Encoding") { chooseEncoding() })
         root.addView(HorizontalScrollView(this).apply { addView(actions) })
-        detail = label("Checking encoding...", 12f, 0xFFB7C5D5.toInt())
+        detail = label("Checking encoding...", 12f, palette.secondary)
         root.addView(detail)
         scroll = ScrollView(this)
-        content = label("", 16f, 0xFFF1F5F9.toInt()).apply {
+        content = label("", 16f, palette.foreground).apply {
             setTextIsSelectable(true)
             setPadding(dp(12), dp(12), dp(12), dp(30))
         }
@@ -185,6 +188,16 @@ class LargeTextReaderActivity : AppCompatActivity() {
         Button(this).apply {
             text = s
             isAllCaps = false
+            setTextColor(palette.foreground)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            minHeight = dp(48)
+            minWidth = dp(48)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = GradientDrawable().apply {
+                setColor(palette.surface)
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), palette.secondary)
+            }
             setOnClickListener { if (!busy) callback() }
         }
 

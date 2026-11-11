@@ -15,6 +15,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import com.blake.editor.ui.preview.PreviewSystemBars
 
 /**
  * DEBUG ONLY. Standalone native EditText baseline for Thai and mixed-script
@@ -45,6 +46,7 @@ class InputLabActivity : AppCompatActivity() {
             setBackgroundColor(0xFF141820.toInt())
         }
         setContentView(root)
+        PreviewSystemBars.install(this, root, 0xFF141820.toInt())
 
         root.addView(TextView(this).apply {
             text = "Blake 2.0 · Native Input Lab"
