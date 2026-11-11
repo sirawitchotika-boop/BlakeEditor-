@@ -95,18 +95,21 @@ class RecoveryDraftStore(private val directory: File) {
         const val MAX_HIDDEN_RECENT_BYTES = 1024 * 1024
         val numberedUntitled = Regex("Untitled ([1-9][0-9]*)")
         // Serializes reservations across store instances within the app process.
-        val numberReservationLock = Any()
+        val recoveryMutationLock = Any()
     }
 
-    @Synchronized
-    fun save(draft: RecoveryDraft): Result<Unit> = runCatching {
+    /** Serializes recovery mutations across all store instances in this app process. */
+    private inline fun <T> mutate(block: () -> T): Result<T> =
+        synchronized(recoveryMutationLock) { runCatching(block) }
+
+    fun save(draft: RecoveryDraft): Result<Unit> = mutate {
         val old = readDraftFile(draft.id)
         if (old != null) {
             require(draft.revision >= old.revision) { "Stale draft revision" }
             require(draft.sourceUri == old.sourceUri) { "Document source changed" }
             if (draft.revision == old.revision) {
                 require(draft == old) { "Conflicting draft revision" }
-                return@runCatching
+                return@mutate
             }
         }
         atomicWrite(fileFor(draft.id), serialize(draft))
@@ -145,11 +148,10 @@ class RecoveryDraftStore(private val directory: File) {
      * record or calls any Android file writer. The record stays openable and
      * is still available in recovery even after an app restart.
      */
-    @Synchronized
     fun hideFromRecent(
         id: DocumentIdentity,
         expectedRevision: Long
-    ): Result<Unit> = runCatching {
+    ): Result<Unit> = mutate {
         val record = readDraftFile(id) ?: error("Saved-file shortcut is missing")
         check(record.trashedAtMs == null && record.savedToDisk) {
             "Only clean saved-file shortcuts can be removed from Recent"
@@ -165,8 +167,7 @@ class RecoveryDraftStore(private val directory: File) {
      * Explicitly reopening the same file may show it in Recent again.
      * Failure to update this shortcut index cannot damage any recovery text.
      */
-    @Synchronized
-    fun showInRecent(id: DocumentIdentity): Result<Unit> = runCatching {
+    fun showInRecent(id: DocumentIdentity): Result<Unit> = mutate {
         val hidden = readHiddenRecentIds()
         if (id in hidden) writeHiddenRecentIds(hidden - id)
     }
@@ -211,7 +212,7 @@ class RecoveryDraftStore(private val directory: File) {
      * cannot be checked. Never reconstruct an existing corrupt counter.
      */
     fun reserveUntitledNumber(): Result<Long> = runCatching {
-        synchronized(numberReservationLock) {
+        synchronized(recoveryMutationLock) {
             val counter = File(directory, UNTITLED_COUNTER)
             val next = if (counter.exists()) {
                 require(counter.isFile && counter.length() in 1L..20L) {
@@ -255,12 +256,11 @@ class RecoveryDraftStore(private val directory: File) {
      * This uses the same durable, atomic recovery write as text edits.
      * Duplicate custom names are intentionally allowed; IDs are the identity.
      */
-    @Synchronized
     fun renameDisplayName(
         id: DocumentIdentity,
         expectedRevision: Long,
         enteredName: String
-    ): Result<RecoveryDraft> = runCatching {
+    ): Result<RecoveryDraft> = mutate {
         val name = enteredName.trim()
         require(name.isNotEmpty()) { "Draft name cannot be empty" }
         require(name.toByteArray(Charsets.UTF_8).size <= MAX_METADATA_BYTES) {
@@ -271,7 +271,7 @@ class RecoveryDraftStore(private val directory: File) {
         check(current.revision == expectedRevision) {
             "Draft changed since Home opened. Reload Home and try again."
         }
-        if (current.displayName == name) return@runCatching current
+        if (current.displayName == name) return@mutate current
         check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
         val updated = current.copy(
             displayName = name,
@@ -290,9 +290,8 @@ class RecoveryDraftStore(private val directory: File) {
      * Home actions pass the revision that was displayed. A newer edit or
      * another operation must win rather than being silently hidden.
      */
-    @Synchronized
     fun moveToTrash(id: DocumentIdentity, expectedRevision: Long): Result<RecoveryDraft> =
-        runCatching {
+        mutate {
             val current = readDraftFile(id) ?: error("Draft is missing; nothing was moved")
             check(current.revision == expectedRevision) {
                 "Draft changed since Home opened. Reload Home before moving it."
@@ -321,12 +320,11 @@ class RecoveryDraftStore(private val directory: File) {
      * The original Trash record stays intact for manual review; never risk
      * overwriting the real source file.
      */
-    @Synchronized
     fun restoreFromTrash(
         id: DocumentIdentity,
         expectedRevision: Long,
         sourceMatches: Boolean
-    ): Result<DraftRestoreResult> = runCatching {
+    ): Result<DraftRestoreResult> = mutate {
         val current = readDraftFile(id) ?: error("Recovery draft is missing")
         check(current.trashedAtMs != null) { "Draft is not in Trash" }
         check(current.revision == expectedRevision) {
@@ -367,11 +365,10 @@ class RecoveryDraftStore(private val directory: File) {
      * Checks identity, stored revision, and Trash state. Never touches Android
      * documents, SAF URIs, saved-file metadata, or untrashed drafts.
      */
-    @Synchronized
     fun deleteTrashedPermanently(
         id: DocumentIdentity,
         expectedRevision: Long
-    ): Result<Unit> = runCatching {
+    ): Result<Unit> = mutate {
         val current = readDraftFile(id) ?: error("Trash entry is missing")
         check(current.trashedAtMs != null) { "Draft is not in Trash" }
         check(current.revision == expectedRevision) {
@@ -386,12 +383,11 @@ class RecoveryDraftStore(private val directory: File) {
      * Only delete when the on-disk revision equals the revision that was
      * successfully written to the real file. Never clear newer unsaved edits.
      */
-    @Synchronized
     fun clearSavedRevision(id: DocumentIdentity, savedRevision: Long): Result<Boolean> =
-        runCatching {
-            val old = readDraftFile(id) ?: return@runCatching false
-            if (old.trashedAtMs != null) return@runCatching false
-            if (old.revision != savedRevision) return@runCatching false
+        mutate {
+            val old = readDraftFile(id) ?: return@mutate false
+            if (old.trashedAtMs != null) return@mutate false
+            if (old.revision != savedRevision) return@mutate false
             if (!fileFor(id).delete()) throw IOException("Could not delete saved recovery draft")
             true
         }
@@ -403,10 +399,9 @@ class RecoveryDraftStore(private val directory: File) {
      * Call this once when the V2 home/document manager becomes active.
      * It is intentionally not invoked by the existing app.
      */
-    @Synchronized
-    fun importLegacy(legacyDirectory: File): LegacyMigrationReport {
+    fun importLegacy(legacyDirectory: File): LegacyMigrationReport = synchronized(recoveryMutationLock) {
         if (File(directory, LEGACY_MARKER).exists()) {
-            return LegacyMigrationReport(0, 0, emptyList(), true)
+            return@synchronized LegacyMigrationReport(0, 0, emptyList(), true)
         }
         var imported = 0
         var alreadyPresent = 0
@@ -476,7 +471,7 @@ class RecoveryDraftStore(private val directory: File) {
                 failures.add(LEGACY_MARKER)
             }
         }
-        return LegacyMigrationReport(imported, alreadyPresent, failures, failures.isEmpty())
+        LegacyMigrationReport(imported, alreadyPresent, failures, failures.isEmpty())
     }
 
     private fun legacyPosition(content: String, line: Int, column: Int): Int {
