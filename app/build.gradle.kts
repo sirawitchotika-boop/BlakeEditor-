@@ -28,12 +28,16 @@ android {
             // Optional side-by-side phone-test build. Never replace the
             // installed original or normal debug app when signing keys differ.
             // Standard debug remains com.blake.editor.debug.
+            // A unique ID per CI run prevents the next test APK from
+            // colliding with a differently signed isolated app on the phone.
+            // Preserve the existing .isolatedtest fallback for older builds.
             applicationIdSuffix =
-                if (providers.gradleProperty("isolatedTestApk").orNull == "true") {
-                    ".isolatedtest"
-                } else {
-                    ".debug"
-                }
+                providers.gradleProperty("isolatedTestApkSuffix").orNull
+                    ?: if (providers.gradleProperty("isolatedTestApk").orNull == "true") {
+                        ".isolatedtest"
+                    } else {
+                        ".debug"
+                    }
             isDebuggable = true
         }
     }

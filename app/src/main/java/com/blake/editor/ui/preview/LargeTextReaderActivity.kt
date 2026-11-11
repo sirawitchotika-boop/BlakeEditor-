@@ -23,8 +23,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Debug-only bounded large text viewer. Read-only by design: no editing
- * controls and no file output streams.
+ * Bounded V2 large text viewer, registered only in the debug manifest.
+ * Read-only by design: no editing controls and no file output streams.
  */
 class LargeTextReaderActivity : AppCompatActivity() {
     private lateinit var root: LinearLayout

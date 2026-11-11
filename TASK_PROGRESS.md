@@ -1,3 +1,16 @@
+## Latest checkpoint — V2 workspace source-set staging (2026-11-11)
+
+- **Baseline:** PR #22 merged into `main` at `0fd2b057eaf98e8376a9dcced7afbebca2c58534`, after 5/5 user-reported phone checks on the isolated APK and passing GitHub Actions run #43018419501.
+- **Current branch:** `feat/blake-v2-workspace-main-source-2026-11-11`, created from the verified baseline above.
+- **Changes in this milestone:** relocate `V2WorkspacePreviewActivity` and its read-only V2 `LargeTextReaderActivity` from debug Kotlin into the shared `src/main` Kotlin source set, keeping package names and behavior unchanged. Move the Markdown Reader HTML/CSS/JS assets and the V2 preview theme into main resources so these shared Activities have their assets in a normal release build.
+- **No production activation:** both V2 Activities remain registered **only in `src/debug/AndroidManifest.xml`**. `src/main/AndroidManifest.xml` is unchanged, with Original as sole MAIN/LAUNCHER and the existing external file router. No V2 navigation path is enabled in release.
+- Extend GitHub CI with `assembleRelease` (not published) and an APK manifest/reader-asset assertion before the isolated side-by-side APK. Keep the existing debug build, test suite and isolated app ID behavior.
+- **Safety:** do not touch the Original editor, URI routing, file writers, draft/backup formats, permission grants, or installed app data.
+- **Checks:** CI and device tests are NOT RUN at the time of this commit; report actual outcomes in the PR. Never merge without Boss approval.
+- **Next action:** Open draft PR, verify the new release gate and isolated test APK, then ask Boss for 5 short phone checks.
+
+---
+
 ## Latest checkpoint — Blake 2.0 display foundation (2026-11-11)
 
 - **Merged and phone accepted:** PR #21, main merge commit `25f196875e071f6bd091df6081ac1d7e2e8a9152`. User reported phone checks 1–5 **PASS**, CI run #43013369328 **SUCCESS**.

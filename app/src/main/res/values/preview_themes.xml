@@ -1,6 +1,6 @@
 <resources>
     <!--
-      Blake V2 debug launcher: match its cold-start status/navigation/camera
+      V2 shared style (launcher still debug-only): match cold-start status/navigation/camera
       area to the dark preview before Android creates the Activity content.
       The runtime helper switches colors and icon contrast for user themes.
       Android 15+ enforces edge-to-edge and ignores opaque status-bar colors,
