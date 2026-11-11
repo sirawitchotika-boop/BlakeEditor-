@@ -1,0 +1,20 @@
+<resources>
+    <!--
+      Blake V2 debug launcher: match its cold-start status/navigation/camera
+      area to the dark preview before Android creates the Activity content.
+      The runtime helper switches colors and icon contrast for user themes.
+      Android 15+ enforces edge-to-edge and ignores opaque status-bar colors,
+      so the native view also draws behind the transparent system bars.
+    -->
+    <style name="Theme.BlakePreview" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">#151820</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:statusBarColor">#151820</item>
+        <item name="android:navigationBarColor">#151820</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>

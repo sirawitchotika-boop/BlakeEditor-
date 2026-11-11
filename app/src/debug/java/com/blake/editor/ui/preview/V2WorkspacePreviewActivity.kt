@@ -1,6 +1,7 @@
 package com.blake.editor.ui.preview
 
 import android.content.Context
+import android.graphics.drawable.GradientDrawable
 import android.content.Intent
 import android.graphics.Typeface
 import android.net.Uri
@@ -115,6 +116,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             setBackgroundColor(BG)
         }
         setContentView(root)
+        PreviewSystemBars.install(this, root, BG)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (active == null) {
@@ -168,23 +170,23 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         markdownSourceMode = false
         disposeReaderView()
         root.removeAllViews()
-        root.setBackgroundColor(BG)
-        label("Blake Editor 2.0", 23f, FG)
-        label("Home · Recovery Preview", 16f, FG)
-        label("Save writes to a real file. Store Draft only keeps recovery data.", 12f, MUTED)
+        PreviewSystemBars.update(this, root, BG)
+        label("Blake Editor 2.0", 22f, FG)
+        label("Home · Your documents", 16f, FG)
+        label("Recovery stays on your phone. Save writes to your chosen file.", 12f, MUTED)
         controls(listOf(
             "New File" to { newFile() },
             "Open File" to { filePicker.launch(arrayOf("*/*")) },
             "Settings" to { showEditorSettings() }
         ))
-        status = label("Loading drafts...", 12f, MUTED)
+        status = label("Loading your documents...", 12f, MUTED)
         val scroll = ScrollView(this)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(list)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         lifecycleScope.launch {
             val listing = withContext(Dispatchers.IO) { workspace.list() }
-            status?.text = "Documents: " + listing.drafts.size
+            status?.text = "Documents: " + listing.drafts.size + " · Stored locally"
             if (listing.unreadableFiles.isNotEmpty()) {
                 status?.append(" · " + listing.unreadableFiles.size + " unreadable, kept safely")
             }
@@ -230,8 +232,8 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         disposeReaderView()
         markdownSourceMode = editMarkdown
         root.removeAllViews()
-        root.setBackgroundColor(BG)
-        label("Blake 2.0 · Document", 21f, FG)
+        PreviewSystemBars.update(this, root, BG)
+        label("Blake 2.0 · Document", 19f, FG)
         val documentActions = mutableListOf<Pair<String, () -> Unit>>(
             "Home" to { goHome() },
             "Switch" to { switcher() },
@@ -244,7 +246,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             documentActions.add("Find / Replace" to { showFindReplace() })
         }
         controls(documentActions)
-        label(draft.displayName, 18f, FG)
+        label(draft.displayName, 16f, FG)
         label("Save updates the file · Store Draft keeps recovery only", 12f, MUTED)
         if (draft.language == "MARKDOWN") {
             controls(listOf((if (editMarkdown) "Reader" else "Edit Source") to {
@@ -970,9 +972,21 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
 
     private fun controls(items: List<Pair<String, () -> Unit>>) {
-        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        items.forEach { (caption, action) -> buttons.addView(button(caption, action)) }
-        root.addView(HorizontalScrollView(this).apply { addView(buttons) })
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(5), 0, dp(7))
+        }
+        items.forEach { (caption, action) ->
+            buttons.addView(button(caption, action).apply {
+                layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+                    marginEnd = dp(6)
+                }
+            })
+        }
+        root.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(buttons)
+        })
     }
 
     private fun label(value: String, sp: Float, color: Int): TextView =
@@ -990,6 +1004,16 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         Button(this).apply {
             text = value
             isAllCaps = false
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextColor(FG)
+            minHeight = dp(48)
+            minWidth = dp(48)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = GradientDrawable().apply {
+                setColor(SURFACE)
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), MUTED)
+            }
             setOnClickListener { if (!busy) action() }
         }
 
