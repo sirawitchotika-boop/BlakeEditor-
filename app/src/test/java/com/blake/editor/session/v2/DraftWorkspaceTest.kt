@@ -63,6 +63,33 @@ class DraftWorkspaceTest {
         assertEquals("Untitled 2", workspace.createUntitled().getOrThrow().displayName)
     }
 
+    @Test fun movedDraftIsHiddenButStillInRecoveryStoreAfterRestart() {
+        val draft = workspace.createUntitled().getOrThrow()
+        val edited = workspace.edit(draft, "Keep these words", 4, 6, 30)
+        workspace.persist(edited).getOrThrow()
+        val moved = workspace.moveToTrash(draft.id, edited.revision).getOrThrow()
+        assertNotNull(moved.trashedAtMs)
+        val fresh = DraftWorkspace(RecoveryDraftStore(directory))
+        val listing = fresh.list()
+        assertEquals(1, V2HomeSections.from(listing).trash.size)
+        assertTrue(V2HomeSections.from(listing).continueWriting.isEmpty())
+        assertEquals("Keep these words", fresh.load(draft.id).getOrThrow()?.content)
+        assertEquals("Untitled 2", fresh.createUntitled().getOrThrow().displayName)
+    }
+
+    @Test fun fileOpenDoesNotSilentlyReopenTrashedRecovery() {
+        val uri = "content://provider/document.txt"
+        val first = workspace.openFromFile(uri, "document.txt", "PLAIN_TEXT",
+            "original", encoding = "UTF8", sourceSha256 = "a".repeat(64)).getOrThrow()
+        val edited = workspace.edit(first, "unsaved", 7, 7, 0)
+        workspace.persist(edited).getOrThrow()
+        val moved = workspace.moveToTrash(first.id, edited.revision).getOrThrow()
+        assertTrue(workspace.openFromFile(uri, "document.txt", "PLAIN_TEXT",
+            "different file content", encoding = "UTF8",
+            sourceSha256 = "b".repeat(64)).isFailure)
+        assertEquals(moved, workspace.load(first.id).getOrThrow())
+    }
+
     @Test fun switchingPersistsOutgoingTextAndCursorBeforeLoading() {
         val first = workspace.createUntitled().getOrThrow()
         val second = workspace.createUntitled().getOrThrow()

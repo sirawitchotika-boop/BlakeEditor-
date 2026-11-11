@@ -203,6 +203,34 @@ class RecoveryDraftStore(private val directory: File) {
     }
 
     /**
+     * Atomically move an unfinished draft into recoverable Trash. This changes
+     * only the private recovery record, never its source URI or real file.
+     * A stale Home row cannot hide more recent unsaved work.
+     */
+    @Synchronized
+    fun moveToTrash(id: DocumentIdentity, expectedRevision: Long): Result<RecoveryDraft> =
+        runCatching {
+            val current = readDraftFile(id) ?: error("Draft is missing; nothing was moved")
+            check(current.trashedAtMs == null) { "This draft is already in Trash" }
+            check(!current.savedToDisk) {
+                "Saved-file shortcuts cannot be trashed. Remove from Recent will be separate."
+            }
+            check(current.revision == expectedRevision) {
+                "The draft changed since Home opened. Reload Home and try again."
+            }
+            check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
+            val updated = current.copy(
+                trashedAtMs = System.currentTimeMillis().coerceAtLeast(1L),
+                revision = current.revision + 1L,
+                updatedAtMs = maxOf(current.updatedAtMs, System.currentTimeMillis())
+            )
+            // If this synced atomic write fails, the older complete draft
+            // remains in Continue Writing and Home must not hide it.
+            save(updated).getOrThrow()
+            updated
+        }
+
+    /**
      * Only delete when the on-disk revision equals the revision that was
      * successfully written to the real file. Never clear newer unsaved edits.
      */
@@ -210,6 +238,7 @@ class RecoveryDraftStore(private val directory: File) {
     fun clearSavedRevision(id: DocumentIdentity, savedRevision: Long): Result<Boolean> =
         runCatching {
             val old = readDraftFile(id) ?: return@runCatching false
+            if (old.trashedAtMs != null) return@runCatching false
             if (old.revision != savedRevision) return@runCatching false
             if (!fileFor(id).delete()) throw IOException("Could not delete saved recovery draft")
             true

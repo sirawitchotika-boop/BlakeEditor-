@@ -52,6 +52,7 @@ class V2HomeSectionsTest {
         val sections = V2HomeSections.from(listing)
         assertEquals(listOf(active), sections.continueWriting)
         assertTrue(sections.recentlySaved.isEmpty())
+        assertEquals(listOf(trashed, savedTrashed), sections.trash)
         assertEquals(3, listing.drafts.size)
     }
 

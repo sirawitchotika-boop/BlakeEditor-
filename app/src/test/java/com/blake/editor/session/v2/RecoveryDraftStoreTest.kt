@@ -145,6 +145,84 @@ class RecoveryDraftStoreTest {
         assertEquals(original.savedToDisk, renamed.savedToDisk)
     }
 
+    @Test fun moveToTrashPersistsEverythingExceptItsTrashStateAndRevision() {
+        val original = RecoveryDraft(
+            id = DocumentIdentity.newUntitled(), sourceUri = null,
+            displayName = "Important notes", language = "MARKDOWN",
+            content = "Unsaved 🌏 ideas", selectionStart = 2,
+            selectionEnd = 8, scrollY = 199, revision = 7
+        )
+        store.save(original).getOrThrow()
+        val moved = store.moveToTrash(original.id, original.revision).getOrThrow()
+        assertTrue(moved.trashedAtMs != null)
+        assertEquals(original.revision + 1, moved.revision)
+        assertEquals(original, moved.copy(
+            trashedAtMs = null,
+            revision = original.revision,
+            updatedAtMs = original.updatedAtMs
+        ))
+        val reloaded = RecoveryDraftStore(File(dir, "v2")).load(original.id).getOrThrow()
+        assertEquals(moved, reloaded)
+        assertEquals(1, store.list().drafts.size)
+        assertFalse(store.clearSavedRevision(original.id, moved.revision).getOrThrow())
+    }
+
+    @Test fun failedTrashRequestsLeaveDraftIntact() {
+        val initial = draft(DocumentIdentity.newUntitled(), "first", 2)
+        store.save(initial).getOrThrow()
+        val newer = initial.copy(content = "newest unsaved text", revision = 3)
+        store.save(newer).getOrThrow()
+        assertTrue(store.moveToTrash(initial.id, initial.revision).isFailure)
+        assertEquals(newer, store.load(initial.id).getOrThrow())
+        assertTrue(store.moveToTrash(DocumentIdentity.newUntitled(), 1).isFailure)
+        assertEquals(newer, store.load(initial.id).getOrThrow())
+        val moved = store.moveToTrash(initial.id, newer.revision).getOrThrow()
+        assertTrue(store.moveToTrash(initial.id, moved.revision).isFailure)
+        assertEquals(moved, store.load(initial.id).getOrThrow())
+    }
+
+    @Test fun corruptedRecoveryIsNotReplacedByTrashMove() {
+        val id = DocumentIdentity.newUntitled()
+        store.save(draft(id, "original")).getOrThrow()
+        val file = File(dir, "v2/" + id.value + ".recovery")
+        file.writeText("invalid recovery bytes")
+        assertTrue(store.moveToTrash(id, 1).isFailure)
+        assertEquals("invalid recovery bytes", file.readText())
+    }
+
+    @Test fun savedFileShortcutIsNotEligibleForDraftTrash() {
+        val uri = "content://provider/real-file.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "real-file.txt", language = "PLAIN_TEXT",
+            content = "saved text", sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = true
+        )
+        store.save(original).getOrThrow()
+        assertTrue(store.moveToTrash(original.id, 1).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun trashingUnsavedLinkedFileNeverChangesItsFileMetadata() {
+        val uri = "content://provider/real-file.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "Unfinished real file", language = "PLAIN_TEXT",
+            content = "unsaved edits", selectionStart = 4, selectionEnd = 8, scrollY = 40,
+            sourceEncoding = "UTF8", sourceSha256 = "a".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val moved = store.moveToTrash(original.id, original.revision).getOrThrow()
+        assertEquals(original.sourceUri, moved.sourceUri)
+        assertEquals(original.sourceSha256, moved.sourceSha256)
+        assertEquals(original.content, moved.content)
+        assertEquals(original.selectionStart, moved.selectionStart)
+        assertEquals(original.selectionEnd, moved.selectionEnd)
+        assertEquals(original.scrollY, moved.scrollY)
+        assertEquals(original.sourceEncoding, moved.sourceEncoding)
+        assertEquals(original.savedToDisk, moved.savedToDisk)
+    }
+
     @Test fun sameExistingFileGetsSameIdentity() {
         val uri = "content://com.android.externalstorage.documents/document/primary%3ANotes%2Fhello.txt"
         val id = DocumentIdentity.forUri(uri)

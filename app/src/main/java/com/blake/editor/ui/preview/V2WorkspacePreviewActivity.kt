@@ -272,7 +272,8 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         controls(listOf(
             "New File" to { newFile() },
             "Open File" to { filePicker.launch(arrayOf("*/*")) },
-            "Settings" to { showEditorSettings() }
+            "Settings" to { showEditorSettings() },
+            "Trash" to { showTrash() }
         ))
         status = label("Loading your documents...", 12f, MUTED)
         val scroll = ScrollView(this)
@@ -285,10 +286,10 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             if (listing.unreadableFiles.isNotEmpty()) {
                 status?.append(" · " + listing.unreadableFiles.size + " unreadable, kept safely")
             }
-            if (listing.drafts.isEmpty()) {
-                list.addView(text("No drafts yet. Tap New File.", 15f, MUTED))
+            val sections = V2HomeSections.from(listing)
+            if (sections.continueWriting.isEmpty() && sections.recentlySaved.isEmpty()) {
+                list.addView(text("No active documents. Tap New File or view Trash.", 15f, MUTED))
             } else {
-                val sections = V2HomeSections.from(listing)
                 val unfinished = sections.continueWriting
                 val saved = sections.recentlySaved
                 if (unfinished.isNotEmpty()) list.addView(text("Continue Writing", 17f, FG))
@@ -305,20 +306,93 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                     })
                     row.addView(button("Rename") { renameDraft(draft) }.apply {
                         layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
-                            marginStart = dp(6)
+                            marginStart = dp(HOME_CARD_GAP_DP)
                         }
                     })
-                    list.addView(row)
+                    row.addView(button("Trash") { confirmMoveToTrash(draft) }.apply {
+                        layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+                            marginStart = dp(HOME_CARD_GAP_DP)
+                        }
+                    })
+                    list.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
+                        bottomMargin = dp(HOME_CARD_GAP_DP)
+                    })
                 }
                 if (saved.isNotEmpty()) list.addView(text("Recent Saved Files", 17f, FG))
                 saved.forEach { draft ->
                     list.addView(button(draft.displayName + " · " + draft.language +
                         "\nSaved file · " + draft.content.length + " characters") {
                         loadDraft(draft.id)
+                    }, LinearLayout.LayoutParams(-1, -2).apply {
+                        bottomMargin = dp(HOME_CARD_GAP_DP)
                     })
                 }
             }
         }
+    }
+
+    private fun showTrash() {
+        if (busy || active != null) return
+        root.removeAllViews()
+        PreviewSystemBars.update(this, root, BG)
+        label("Blake 2.0 · Trash", 22f, FG)
+        label("Recovery stays on your phone. Nothing here is auto-deleted.", 12f, MUTED)
+        controls(listOf("Back to Home" to { showHome() }))
+        status = label("Loading Trash...", 12f, MUTED)
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll.addView(list)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        lifecycleScope.launch {
+            val listing = withContext(Dispatchers.IO) { workspace.list() }
+            val trashed = V2HomeSections.from(listing).trash
+            status?.text = "Trash: " + trashed.size + " · Recovery records kept"
+            if (listing.unreadableFiles.isNotEmpty()) {
+                status?.append(" · " + listing.unreadableFiles.size +
+                    " unreadable records retained")
+            }
+            if (trashed.isEmpty()) {
+                list.addView(text("Trash is empty.", 15f, MUTED))
+            } else {
+                trashed.forEach { draft ->
+                    list.addView(text(draft.displayName + " · " + draft.language +
+                        "\nRecovery retained · " + draft.content.length + " characters",
+                        15f, FG), LinearLayout.LayoutParams(-1, -2).apply {
+                        bottomMargin = dp(HOME_CARD_GAP_DP)
+                    })
+                }
+                list.addView(text(
+                    "Restore and permanent deletion will be added in the next milestone.",
+                    12f, MUTED))
+            }
+        }
+    }
+
+    private fun confirmMoveToTrash(draft: RecoveryDraft) {
+        if (busy || active != null) return
+        AlertDialog.Builder(this)
+            .setTitle("Move to Trash?")
+            .setMessage("Move \"" + draft.displayName + "\" to Trash?\n\n" +
+                "Its entire unsaved text and recovery state stay on this phone. " +
+                "Restore is planned for the next milestone. " +
+                "No real file will be changed.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Move to Trash") { _, _ ->
+                if (busy || active != null) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        workspace.moveToTrash(draft.id, draft.revision)
+                    }
+                    busy = false
+                    result.onSuccess { showHome() }
+                        .onFailure {
+                            dialog("Could not move draft to Trash", it.message.orEmpty() +
+                                "\nYour recovery record was not intentionally removed.")
+                        }
+                }
+            }
+            .show()
     }
 
     private fun renameDraft(draft: RecoveryDraft) {
@@ -874,9 +948,10 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this@V2WorkspacePreviewActivity)
             .setTitle("Quick Document Switcher")
-            .setItems(entries.drafts.map { it.displayName + " · " + it.content.length + " chars" }
+            .setItems(entries.drafts.filter { it.trashedAtMs == null }
+                .map { it.displayName + " · " + it.content.length + " chars" }
                 .toTypedArray()) { _, index ->
-                loadDraft(entries.drafts[index].id)
+                loadDraft(entries.drafts.filter { it.trashedAtMs == null }[index].id)
             }
             .setNeutralButton("New File") { _, _ -> afterStored { createAfterSwitch() } }
             .setNegativeButton("Cancel", null)
@@ -899,7 +974,9 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 busy = false
                 result.onSuccess { draft ->
                     if (draft == null) dialog("Draft missing", "No recovery data found.")
-                    else showEditor(draft)
+                    else if (draft.trashedAtMs != null) {
+                        dialog("Draft is in Trash", "Its recovery data was kept. Open Trash from Home.")
+                    } else showEditor(draft)
                 }.onFailure { dialog("Could not open draft", it.message.orEmpty()) }
             }
         } else {
@@ -1182,6 +1259,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         IllegalArgumentException("File exceeds the 2 MB editable preview limit")
 
     private companion object {
+        const val HOME_CARD_GAP_DP = 8
         const val MAX_EDIT_BYTES = 2 * 1024 * 1024
         const val MAX_MARKDOWN_RENDER_CHARS = 300_000
     }
