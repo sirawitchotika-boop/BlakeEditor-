@@ -93,6 +93,24 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
     private var active: RecoveryDraft? = null
     private var autosave: Job? = null
     private var highlightJob: Job? = null
+    private var pendingTextChange = false
+
+    private data class PersistedVersion(val documentId: String, val revision: Long)
+    @Volatile private var lastPersisted: PersistedVersion? = null
+
+    private fun isPersisted(draft: RecoveryDraft): Boolean =
+        PreviewPowerPolicy.needsWrite(
+            draft.id.value, draft.revision,
+            lastPersisted?.documentId, lastPersisted?.revision ?: -1L
+        ).not()
+
+    private fun markPersisted(draft: RecoveryDraft) {
+        val current = lastPersisted
+        if (current?.documentId != draft.id.value ||
+            current.revision < draft.revision) {
+            lastPersisted = PersistedVersion(draft.id.value, draft.revision)
+        }
+    }
     private var binding = false
     private var busy = false
 
@@ -146,25 +164,99 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                     workspace.load(DocumentIdentity.fromStored(rememberedId)).getOrThrow()
                 }.getOrNull()
             }
-            if (recovered == null) showHome() else showEditor(recovered)
+            // Folds/rotation can destroy the Activity before its asynchronous
+            // onStop disk flush finishes. A small Bundle snapshot keeps recent
+            // changes recoverable, without risking Android Binder size limits.
+            val pending = savedInstanceState?.let { bundle ->
+                val text = bundle.getString("pending_text")
+                val id = bundle.getString("pending_id")
+                if (text == null || id == null) null else ResumeSnapshot(
+                    id, text,
+                    bundle.getInt("pending_start"), bundle.getInt("pending_end"),
+                    bundle.getInt("pending_scroll"), bundle.getLong("pending_revision")
+                )
+            }
+            val extra = recovered?.let { PreviewResumePolicy.restore(it, pending) }
+            var restored = extra ?: recovered
+            var knownStored = extra == null
+            if (extra != null) {
+                val saved = withContext(Dispatchers.IO) { workspace.persist(extra) }
+                knownStored = saved.isSuccess
+                if (saved.isFailure) {
+                    // Another Activity may already have saved an even newer
+                    // revision; never show a stale document over that record.
+                    val latest = withContext(Dispatchers.IO) {
+                        workspace.load(extra.id).getOrNull()
+                    }
+                    if (latest != null && latest.revision > extra.revision) {
+                        restored = latest
+                        knownStored = true
+                    }
+                }
+            }
+            if (restored == null) showHome()
+            else showEditor(restored, knownStored = knownStored)
         }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        active?.let { outState.putString("active_id", it.id.value) }
+        capture()?.let { draft ->
+            outState.putString("active_id", draft.id.value)
+            if (!isPersisted(draft)) {
+                PreviewResumePolicy.capture(draft)?.let { pending ->
+                    outState.putString("pending_id", pending.id)
+                    outState.putString("pending_text", pending.content)
+                    outState.putInt("pending_start", pending.selectionStart)
+                    outState.putInt("pending_end", pending.selectionEnd)
+                    outState.putInt("pending_scroll", pending.scrollY)
+                    outState.putLong("pending_revision", pending.revision)
+                }
+            }
+        }
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onPause() {
+        // No background animation or live syntax scanning when not focused.
+        highlightJob?.cancel()
+        readerWebView?.onPause()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        readerWebView?.onResume()
+        val field = input
+        val draft = active
+        if (field != null && draft != null) {
+            scheduleSyntaxHighlight(field, draft.language, immediate = true)
+        }
     }
 
     override fun onStop() {
         super.onStop()
-        val snapshot = capture() ?: return
         autosave?.cancel()
-        lastChanceSaver.launch { workspace.persist(snapshot) }
+        highlightJob?.cancel()
+        val snapshot = capture() ?: return
+        if (isPersisted(snapshot)) return
+        // Finish a single short atomic write on IO after the UI goes away.
+        // Do not hold a wake lock or keep a permanent background service.
+        lastChanceSaver.launch {
+            if (workspace.persist(snapshot).isSuccess) markPersisted(snapshot)
+        }
+    }
+
+    override fun onDestroy() {
+        highlightJob?.cancel()
+        autosave?.cancel()
+        disposeReaderView()
+        super.onDestroy()
     }
 
     private fun showHome() {
         autosave?.cancel()
         highlightJob?.cancel()
+        pendingTextChange = false
         active = null
         input = null
         markdownSourceMode = false
@@ -225,8 +317,10 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
     }
 
     private fun showEditor(draft: RecoveryDraft, focusKeyboard: Boolean = false,
-        editMarkdown: Boolean = false) {
+        editMarkdown: Boolean = false, knownStored: Boolean = true) {
         active = draft
+        if (knownStored) markPersisted(draft)
+        pendingTextChange = !knownStored
         autosave?.cancel()
         highlightJob?.cancel()
         disposeReaderView()
@@ -302,12 +396,14 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
-                changed()
+                changed(textChanged = true)
                 scheduleSyntaxHighlight(field, draft.language)
             }
         })
-        field.onSelection = { changed() }
-        field.setOnScrollChangeListener { _, _, _, _, _ -> changed() }
+        field.onSelection = { changed(textChanged = false) }
+        field.setOnScrollChangeListener { _, _, _, _, _ ->
+            changed(textChanged = false)
+        }
         binding = false
         scheduleSyntaxHighlight(field, draft.language, immediate = true)
         field.post { if (active?.id == draft.id) field.scrollTo(0, draft.scrollY) }
@@ -657,17 +753,24 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun changed() {
+    private fun changed(textChanged: Boolean) {
         if (binding || busy) return
         val before = active ?: return
-        val snapshot = capture() ?: return
-        if (snapshot.revision == before.revision) return
-        status?.text = "Unsaved to recovery · Revision " + snapshot.revision
+        val snapshot = capture(includeText = textChanged) ?: return
+        if (snapshot.revision == before.revision || isPersisted(snapshot)) return
+        if (textChanged) pendingTextChange = true
+        status?.text = "Recovery pending · Revision " + snapshot.revision
         autosave?.cancel()
+        // Content gets a quick debounce. Cursor/scroll-only changes are cheap
+        // to keep in memory and can wait until the user stops interacting.
+        val waitMs = PreviewPowerPolicy.autosaveDelay(pendingTextChange)
         autosave = lifecycleScope.launch {
-            delay(350L)
+            delay(waitMs)
+            if (isPersisted(snapshot)) return@launch
             val saved = withContext(Dispatchers.IO) { workspace.persist(snapshot) }
+            if (saved.isSuccess) markPersisted(snapshot)
             if (active?.id == snapshot.id && active?.revision == snapshot.revision) {
+                if (saved.isSuccess) pendingTextChange = false
                 status?.text = if (saved.isSuccess) {
                     "Recovery draft stored · Revision " + snapshot.revision
                 } else {
@@ -677,11 +780,12 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
     }
 
-    private fun capture(): RecoveryDraft? {
+    private fun capture(includeText: Boolean = true): RecoveryDraft? {
         val old = active ?: return null
         val view = input ?: return old
         return workspace.edit(
-            old, view.text?.toString().orEmpty(),
+            old,
+            if (includeText) view.text?.toString().orEmpty() else old.content,
             view.selectionStart.coerceAtLeast(0), view.selectionEnd.coerceAtLeast(0),
             view.scrollY
         ).also { active = it }
@@ -697,6 +801,8 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) { workspace.persist(snapshot) }
             if (result.isSuccess) {
+                markPersisted(snapshot)
+                pendingTextChange = false
                 next(snapshot)
             } else {
                 dialog("Recovery failed — staying in the editor",
