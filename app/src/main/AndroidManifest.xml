@@ -18,6 +18,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+        </activity>
+
+        <!-- External file opens must be classified before the native editor
+             and its WebView are initialized. No whole-file loading here. -->
+        <activity
+            android:name=".ui.large.ExternalFileRouterActivity"
+            android:exported="true"
+            android:theme="@style/Theme.BlakeEditor"
+            android:label="Blake Editor">
             <!-- Default TXT Document Handler (Settings -> Default apps -> Documents -> TXT on realme UI) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -80,6 +89,14 @@
                 <data android:mimeType="application/x-javascript" />
             </intent-filter>
         </activity>
+
+        <!-- Read-only paging also exists in release builds. External
+             ACTION_VIEW always enters MainActivity first for size checking. -->
+        <activity
+            android:name=".ui.large.LargeTextReaderActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BlakeEditor"
+            android:label="Large Text Reader" />
     </application>
 
 </manifest>

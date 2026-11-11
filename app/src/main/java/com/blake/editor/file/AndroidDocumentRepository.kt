@@ -5,8 +5,6 @@ import android.net.Uri
 import com.blake.editor.core.model.OpenedDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 
 class AndroidDocumentRepository(
@@ -23,10 +21,10 @@ class AndroidDocumentRepository(
             val inputStream = contentResolver.openInputStream(uri)
                 ?: throw IllegalStateException("Unable to open input stream for URI: $uri")
 
+            // A saved session or a provider with missing size information
+            // must not bypass the 2 MiB editable-file limit.
             val content = inputStream.use { stream ->
-                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
-                    reader.readText()
-                }
+                BoundedEditableTextReader.readUtf8(stream)
             }
 
             Pair(metadata, content)

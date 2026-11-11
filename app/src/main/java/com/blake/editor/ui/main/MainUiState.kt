@@ -6,6 +6,8 @@ import com.blake.editor.core.model.ThemeMode
 
 data class MainUiState(
     val currentUri: Uri? = null,
+    /** One-shot event: route oversized files to the read-only pager. */
+    val pendingLargeReaderUri: Uri? = null,
     val fileName: String = "untitled.txt",
     val content: String = "",
     /** Changes only when a different document is loaded or New is pressed. */

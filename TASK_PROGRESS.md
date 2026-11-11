@@ -1,24 +1,43 @@
-# Blake Editor — original editor native-input repair
+# Blake Editor — external large-file open blocker (revised after phone fail)
 
-## Phone blocker
-User confirms PR #13 latest APK still duplicates text and jumps the caret
-while typing and backspacing across English/Thai wrapped lines.
-PR #13 phone result: FAILED despite green CI. Result documented in PR #13.
+## Phone result
+Original PR #15 CI run #42959894164 passed, but **PHONE TEST FAILED**:
+the original Blake Editor displayed "Reading file..." when opening
+large_text_over_2MB.txt, then hung and was force-stopped / exited.
+No Android crash stack or installed APK build ID was available.
 
-## New branch
-fix/blake-v1-native-input-default-2026-11-11
-Base main bd1f59fd7423b40cbe69b3d0f1f831b50d23f5af
+## Root and approach
+The first external check still entered MainActivity (which initializes
+native editing and a WebView) before routing to a pager.
+The direct original ViewModel document loader also had no independent
+user-visible read-only fallback after metadata/provider inconsistencies.
 
-- [x] Original V1 normal editing uses Android native EditText.
-- [x] WebView retained only for formatted Markdown Preview.
-- [x] Document-generation sync prevents re-applying typing to input.
-- [x] Native Undo/Redo history with bounded RAM.
-- [x] Line-column display and pure regression tests.
-- [ ] GitHub Actions unit tests and APK build pending.
-- [ ] Real phone wrap/backspace, Thai/emoji typing tests pending.
-- [ ] Recheck Save, Markdown Preview and separate V2 Preview on phone.
+## Branch
+fix/blake-external-large-text-readonly-2026-11-11
+Base main: a33426d46949b9f854bb2bb86b99c6b257c4fbb8
+First PR commit: ad0ef2ee41f6c21abfeb55f2aefcdddb57aa7714
 
-Trade-off: old Ace code colors and line-number gutter temporarily absent
-on the original launcher. Native V2 Preview retains those features.
-No changes to file writing or recovery. Keep draft PR unmerged until
-phone evidence confirms typing reliability.
+## Revised work
+- [x] Android external VIEW/EDIT filters moved from MainActivity to a
+      lightweight router which checks size BEFORE any editor or WebView.
+- [x] Large external files launch the existing main-source, read-only paged
+      reader; small files forward grants to the normal native editor.
+- [x] Existing in-app OPEN still checks size before file load.
+- [x] MainViewModel independently checks metadata and catches a typed
+      oversized input exception; both lead to the same reader dialog.
+- [x] Saved-session oversized reads also route to the reader.
+- [x] Native editor refuses oversized legacy recovery text layouts.
+- [x] Tests cover typed overflow + bounded stream size.
+- [ ] New revised CI unit tests and APK build pending.
+- [ ] Physical phone retest pending; PR #15 must remain DRAFT.
+- [ ] Confirm paging/permission behavior and small-file typing + Save.
+
+## Safety
+No file writers, encodings, backup format or V2 Preview changed.
+External URI access is forwarded only with existing permission flags.
+No wake locks, background service, whole-file buffering or polling.
+Do NOT merge until a real phone proves the corrected Open with path.
+
+## Next action
+Commit revised route to PR #15, verify CI, then test external Open with
+large_text_over_2MB.txt and regular original OPEN on phone.

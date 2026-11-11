@@ -9,6 +9,8 @@ import com.blake.editor.core.model.SyntaxMode
 import com.blake.editor.core.model.ThemeMode
 import com.blake.editor.editor.SyntaxResolver
 import com.blake.editor.file.DocumentRepository
+import com.blake.editor.file.LargeTextOpenGate
+import com.blake.editor.file.OversizedEditableFileException
 import com.blake.editor.session.DraftRepository
 import com.blake.editor.session.FileDraftRepository
 import com.blake.editor.session.SessionStore
@@ -33,6 +35,22 @@ class MainViewModel(
 
     private var draftSaveJob: Job? = null
     private var sessionSaveJob: Job? = null
+    private var activeDocumentOpen: Job? = null
+
+    /** Consume the one-shot event before showing the reader prompt. */
+    fun consumeLargeFileRequest() {
+        if (_uiState.value.pendingLargeReaderUri != null) {
+            _uiState.update { it.copy(pendingLargeReaderUri = null) }
+        }
+    }
+
+    private fun requestLargeReader(uri: Uri) {
+        _uiState.update {
+            it.copy(isLoading = false, isPreviewing = false,
+                pendingLargeReaderUri = uri,
+                statusMessage = "Large file detected · Read-only paging available")
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -141,13 +159,17 @@ class MainViewModel(
                                 )
                             }
                         }
-                        .onFailure {
-                            _uiState.update {
-                                it.copy(
-                                    isLoading = false,
-                                    isPreviewing = false,
-                                    statusMessage = "Blake Editor   Phase 8 Ready"
-                                )
+                        .onFailure { error ->
+                            if (error is OversizedEditableFileException) {
+                                requestLargeReader(session.uri)
+                            } else {
+                                _uiState.update {
+                                    it.copy(
+                                        isLoading = false,
+                                        isPreviewing = false,
+                                        statusMessage = "Blake Editor   Phase 8 Ready"
+                                    )
+                                }
                             }
                         }
                     return@launch
@@ -188,8 +210,20 @@ class MainViewModel(
     }
 
     fun openDocument(uri: Uri) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Reading file...") }
+        activeDocumentOpen?.cancel()
+        activeDocumentOpen = viewModelScope.launch {
+            _uiState.update {
+                it.copy(isLoading = true, pendingLargeReaderUri = null,
+                    statusMessage = "Checking file size before editing...")
+            }
+            // Independent of MainActivity's entry-point gate. A restored
+            // session, direct ViewModel call or a provider with unusual
+            // permissions must never bypass the native input safety limit.
+            val metadata = documentRepository.getMetadata(uri).getOrNull()
+            if (metadata != null && metadata.sizeBytes > LargeTextOpenGate.MAX_EDIT_BYTES) {
+                requestLargeReader(uri)
+                return@launch
+            }
             documentRepository.read(uri)
                 .onSuccess { (metadata, fileContent) ->
                     val syntax = SyntaxResolver.resolve(metadata.displayName, metadata.mimeType)
@@ -233,11 +267,15 @@ class MainViewModel(
                     updateSession()
                 }
                 .onFailure { error ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            statusMessage = "Error opening file: ${error.message}"
-                        )
+                    if (error is OversizedEditableFileException) {
+                        requestLargeReader(uri)
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                statusMessage = "Error opening file: ${error.message}"
+                            )
+                        }
                     }
                 }
         }

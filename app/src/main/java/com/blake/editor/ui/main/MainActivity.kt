@@ -1,6 +1,8 @@
 package com.blake.editor.ui.main
 
 import android.content.Intent
+import android.content.ClipData
+import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.Editable
@@ -21,17 +23,26 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.blake.editor.BlakeEditorApp
 import com.blake.editor.R
+import com.blake.editor.core.model.SyntaxMode
 import com.blake.editor.core.model.ThemeMode
 import com.blake.editor.editor.EditorCommand
+import com.blake.editor.file.LargeTextOpenGate
+import com.blake.editor.ui.large.LargeTextReaderActivity
 import com.blake.editor.editor.EditorController
+import com.blake.editor.editor.NativeCodePresentation
 import com.blake.editor.editor.NativeDocumentSyncGuard
 import com.blake.editor.editor.NativeInputEditText
 import com.blake.editor.editor.NativeUndoHistory
 import com.blake.editor.editor.EditorEvent
+import com.blake.editor.editor.v2.CodeSyntaxScanner
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
 import com.blake.editor.ui.system.EdgeToEdgeController
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -48,7 +59,7 @@ class MainActivity : AppCompatActivity() {
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        uri?.let { viewModel.openDocument(it) }
+        uri?.let { openDocumentSafely(it) }
     }
 
     private val createDocumentLauncher = registerForActivityResult(
@@ -69,6 +80,7 @@ class MainActivity : AppCompatActivity() {
     private val documentSync = NativeDocumentSyncGuard()
     private val nativeUndo = NativeUndoHistory()
     private var applyingExternalText = false
+    private var pendingOpenCheck: Job? = null
 
     private lateinit var btnNew: Button
     private lateinit var btnOpen: Button
@@ -80,6 +92,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPreview: Button
 
     private var lastAppliedTheme: ThemeMode? = null
+    private var lastSyntaxMode: SyntaxMode? = null
+    private var lastHighlightedGeneration: Long? = null
+    private var highlightJob: Job? = null
     private var lastPreviewState: Boolean? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -113,7 +128,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             val request = IncomingIntentParser.parse(intent)
             if (request != null) {
-                viewModel.openDocument(request.uri)
+                handleIncomingIntent(intent)
             } else {
                 viewModel.restoreSessionOrDraft()
             }
@@ -127,19 +142,85 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        highlightJob?.cancel()
         super.onPause()
         viewModel.flushDraft()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::nativeEditor.isInitialized) {
+            scheduleSyntaxHighlight(viewModel.uiState.value.syntaxMode, immediate = true)
+        }
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
         val request = IncomingIntentParser.parse(intent) ?: return
         if (viewModel.uiState.value.isDirty) {
             showUnsavedChangesDialog {
-                viewModel.openDocument(request.uri)
+                openDocumentSafely(request.uri, intent)
             }
         } else {
-            viewModel.openDocument(request.uri)
+            openDocumentSafely(request.uri, intent)
         }
+    }
+
+    /**
+     * One gate for the in-app Open button and Android's ACTION_VIEW/EDIT.
+     * A provider can lie about size or omit it. Probe at most 2 MiB + 1
+     * bytes on IO before letting the original editable ViewModel read it.
+     * This never changes the current document or writes to the source file.
+     */
+    private fun openDocumentSafely(uri: Uri, incomingIntent: Intent? = null) {
+        pendingOpenCheck?.cancel()
+        tvStatus.text = "Checking file size (safe open)..."
+        pendingOpenCheck = lifecycleScope.launch {
+            val check = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = (application as BlakeEditorApp)
+                        .appContainer.documentRepository.getMetadata(uri)
+                        .getOrNull()?.sizeBytes
+                    LargeTextOpenGate.classify(bytes) {
+                        contentResolver.openInputStream(uri)
+                            ?: error("Storage provider could not open this document")
+                    }
+                }
+            }
+            check.onSuccess { decision ->
+                when (decision) {
+                    LargeTextOpenGate.Decision.EDIT -> viewModel.openDocument(uri)
+                    LargeTextOpenGate.Decision.READ_ONLY_PAGES ->
+                        showLargeFileDialog(uri)
+                }
+            }.onFailure {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Cannot open file")
+                    .setMessage(it.message ?: "The file provider could not read this file.")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun showLargeFileDialog(uri: Uri) {
+        AlertDialog.Builder(this)
+            .setTitle("Large file — read only")
+            .setMessage("This file is larger than 2 MB. Read it in small pages " +
+                "using Previous and Next? The original file will not be changed.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Open Reader") { _, _ ->
+                val reader = Intent(this, LargeTextReaderActivity::class.java).apply {
+                    data = uri
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    if (uri.scheme == "content") {
+                        clipData = ClipData.newUri(
+                            contentResolver, "Large text document", uri
+                        )
+                    }
+                }
+                startActivity(reader)
+            }
+            .show()
     }
 
     /**
@@ -165,6 +246,7 @@ class MainActivity : AppCompatActivity() {
                 val content = s?.toString().orEmpty()
                 nativeUndo.edited(content, SystemClock.uptimeMillis())
                 viewModel.onContentChanged(content)
+                scheduleSyntaxHighlight(viewModel.uiState.value.syntaxMode)
             }
         })
         nativeEditor.onCursorMoved = { line, col ->
@@ -178,6 +260,12 @@ class MainActivity : AppCompatActivity() {
         // StateFlow emits after every key/cursor move. NEVER call setText
         // for those echoes: it breaks Thai composing text and caret position.
         if (!documentSync.shouldLoad(state.documentGeneration)) return
+        // Old recovery snapshots may predate the byte limit. Never try to
+        // construct a multi-megabyte native EditText layout on the UI thread.
+        if (state.content.length > LargeTextOpenGate.MAX_EDIT_BYTES) {
+            tvStatus.text = "Restored draft is too large for editing; no text was changed"
+            return
+        }
         applyingExternalText = true
         try {
             nativeEditor.setText(state.content)
@@ -203,6 +291,33 @@ class MainActivity : AppCompatActivity() {
             applyingExternalText = false
         }
         viewModel.onContentChanged(content)
+    }
+
+    /**
+     * Scan off the UI thread. Render spans only on unchanged native input;
+     * never replace the document, selection, or active IME composition.
+     */
+    private fun scheduleSyntaxHighlight(mode: SyntaxMode, immediate: Boolean = false) {
+        highlightJob?.cancel()
+        if (!::nativeEditor.isInitialized ||
+            !NativeCodePresentation.shouldHighlight(mode, nativeEditor.length()) ||
+            viewModel.uiState.value.isPreviewing) {
+            if (::nativeEditor.isInitialized) nativeEditor.clearSyntaxTokens()
+            return
+        }
+        val snapshot = nativeEditor.text?.toString().orEmpty()
+        highlightJob = lifecycleScope.launch {
+            if (!immediate) delay(220L)
+            val tokens = withContext(Dispatchers.Default) {
+                CodeSyntaxScanner.scan(snapshot, mode.name)
+            }
+            val current = viewModel.uiState.value
+            if (!current.isPreviewing && current.syntaxMode == mode &&
+                nativeEditor.text?.toString() == snapshot) {
+                nativeEditor.applySyntaxTokens(tokens,
+                    NativeCodePresentation.colorsFor(current.themeMode))
+            }
+        }
     }
 
     private fun setupEditor() {
@@ -320,17 +435,35 @@ class MainActivity : AppCompatActivity() {
                     val dirtyIndicator = if (state.isDirty) "*" else ""
                     tvFileName.text = "${state.fileName}$dirtyIndicator"
                     tvStatus.text = state.statusMessage
+                    state.pendingLargeReaderUri?.let { oversized ->
+                        viewModel.consumeLargeFileRequest()
+                        showLargeFileDialog(oversized)
+                    }
 
                     val modeText = if (state.isPreviewing) "Preview"
                         else state.syntaxMode.displayName + " · Native"
                     tvEditorInfo.text = "Ln ${state.cursorLine}, Col ${state.cursorColumn} | $modeText"
+                    val newDocument = lastHighlightedGeneration != state.documentGeneration
+                    if (newDocument) lastHighlightedGeneration = state.documentGeneration
                     loadNativeDocument(state)
 
-                    // Theme switching
-                    if (state.themeMode != lastAppliedTheme) {
+                    val themeChanged = state.themeMode != lastAppliedTheme
+                    val modeChanged = state.syntaxMode != lastSyntaxMode
+                    if (themeChanged) {
                         lastAppliedTheme = state.themeMode
                         applyThemePalette(state.themeMode)
                         editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                    }
+                    if (modeChanged || themeChanged) {
+                        lastSyntaxMode = state.syntaxMode
+                        val palette = ThemeController.getPalette(state.themeMode)
+                        nativeEditor.configureGutter(
+                            NativeCodePresentation.showLineNumbers(state.syntaxMode),
+                            palette.surfaceColor, palette.secondaryTextColor
+                        )
+                    }
+                    if (newDocument || modeChanged || themeChanged) {
+                        scheduleSyntaxHighlight(state.syntaxMode, immediate = true)
                     }
 
                     // The WebView never owns the live keyboard.
