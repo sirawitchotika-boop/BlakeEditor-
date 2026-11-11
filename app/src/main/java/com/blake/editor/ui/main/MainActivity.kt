@@ -1,6 +1,8 @@
 package com.blake.editor.ui.main
 
 import android.content.Intent
+import android.content.ClipData
+import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.Editable
@@ -23,6 +25,8 @@ import com.blake.editor.BlakeEditorApp
 import com.blake.editor.R
 import com.blake.editor.core.model.ThemeMode
 import com.blake.editor.editor.EditorCommand
+import com.blake.editor.file.LargeTextOpenGate
+import com.blake.editor.ui.large.LargeTextReaderActivity
 import com.blake.editor.editor.EditorController
 import com.blake.editor.editor.NativeDocumentSyncGuard
 import com.blake.editor.editor.NativeInputEditText
@@ -32,6 +36,9 @@ import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
 import com.blake.editor.ui.system.EdgeToEdgeController
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -48,7 +55,7 @@ class MainActivity : AppCompatActivity() {
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        uri?.let { viewModel.openDocument(it) }
+        uri?.let { openDocumentSafely(it) }
     }
 
     private val createDocumentLauncher = registerForActivityResult(
@@ -69,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private val documentSync = NativeDocumentSyncGuard()
     private val nativeUndo = NativeUndoHistory()
     private var applyingExternalText = false
+    private var pendingOpenCheck: Job? = null
 
     private lateinit var btnNew: Button
     private lateinit var btnOpen: Button
@@ -113,7 +121,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             val request = IncomingIntentParser.parse(intent)
             if (request != null) {
-                viewModel.openDocument(request.uri)
+                handleIncomingIntent(intent)
             } else {
                 viewModel.restoreSessionOrDraft()
             }
@@ -135,10 +143,65 @@ class MainActivity : AppCompatActivity() {
         val request = IncomingIntentParser.parse(intent) ?: return
         if (viewModel.uiState.value.isDirty) {
             showUnsavedChangesDialog {
-                viewModel.openDocument(request.uri)
+                openDocumentSafely(request.uri, intent)
             }
         } else {
-            viewModel.openDocument(request.uri)
+            openDocumentSafely(request.uri, intent)
+        }
+    }
+
+    /**
+     * One gate for the in-app Open button and Android's ACTION_VIEW/EDIT.
+     * A provider can lie about size or omit it. Probe at most 2 MiB + 1
+     * bytes on IO before letting the original editable ViewModel read it.
+     * This never changes the current document or writes to the source file.
+     */
+    private fun openDocumentSafely(uri: Uri, incomingIntent: Intent? = null) {
+        pendingOpenCheck?.cancel()
+        pendingOpenCheck = lifecycleScope.launch {
+            val check = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = (application as BlakeEditorApp)
+                        .appContainer.documentRepository.getMetadata(uri)
+                        .getOrNull()?.sizeBytes
+                    LargeTextOpenGate.classify(bytes) {
+                        contentResolver.openInputStream(uri)
+                            ?: error("Storage provider could not open this document")
+                    }
+                }
+            }
+            check.onSuccess { decision ->
+                when (decision) {
+                    LargeTextOpenGate.Decision.EDIT -> viewModel.openDocument(uri)
+                    LargeTextOpenGate.Decision.READ_ONLY_PAGES ->
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Large file — read only")
+                            .setMessage("This file is larger than 2 MB. " +
+                                "Open it in the paged reader with Previous and Next? " +
+                                "Your original file will not be changed.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Open Reader") { _, _ ->
+                                val reader = Intent(this@MainActivity,
+                                    LargeTextReaderActivity::class.java).apply {
+                                    data = uri
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    // Preserve the external provider's temporary
+                                    // access when passing the URI to the viewer.
+                                    clipData = ClipData.newUri(
+                                        contentResolver, "Large text document", uri
+                                    )
+                                }
+                                startActivity(reader)
+                            }
+                            .show()
+                }
+            }.onFailure {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Cannot open file")
+                    .setMessage(it.message ?: "The file provider could not read this file.")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
         }
     }
 

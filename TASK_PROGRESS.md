@@ -1,24 +1,37 @@
-# Blake Editor — original editor native-input repair
+# Blake Editor — external large-file Open with hotfix
 
-## Phone blocker
-User confirms PR #13 latest APK still duplicates text and jumps the caret
-while typing and backspacing across English/Thai wrapped lines.
-PR #13 phone result: FAILED despite green CI. Result documented in PR #13.
+## User report
+External **Open with BlakeEditor** on a file over 2 MiB opens through
+the original editor without V2 Preview's read-only paging protection.
+The same file opened inside Blake 2.0 Preview uses Previous/Next.
 
-## New branch
-fix/blake-v1-native-input-default-2026-11-11
-Base main bd1f59fd7423b40cbe69b3d0f1f831b50d23f5af
+## Root cause
+MainActivity receives ACTION_VIEW / ACTION_EDIT and directly calls
+MainViewModel.openDocument() -> AndroidDocumentRepository.readText()
+without a byte limit. The internal original Open picker did the same.
+V2's pager is debug-only, not on this route.
 
-- [x] Original V1 normal editing uses Android native EditText.
-- [x] WebView retained only for formatted Markdown Preview.
-- [x] Document-generation sync prevents re-applying typing to input.
-- [x] Native Undo/Redo history with bounded RAM.
-- [x] Line-column display and pure regression tests.
-- [ ] GitHub Actions unit tests and APK build pending.
-- [ ] Real phone wrap/backspace, Thai/emoji typing tests pending.
-- [ ] Recheck Save, Markdown Preview and separate V2 Preview on phone.
+## Branch
+fix/blake-external-large-text-readonly-2026-11-11
+Base main: a33426d46949b9f854bb2bb86b99c6b257c4fbb8
 
-Trade-off: old Ace code colors and line-number gutter temporarily absent
-on the original launcher. Native V2 Preview retains those features.
-No changes to file writing or recovery. Keep draft PR unmerged until
-phone evidence confirms typing reliability.
+## Work
+- [x] Both internal original Open and external Open with enter a common
+      size-checking coroutine before editing.
+- [x] Bounded probe handles unknown or lying file-provider sizes.
+- [x] Explicit warning leads to read-only paged reader (Next/Previous).
+- [x] New main-source (release-available) reader Activity with URI grant.
+- [x] Safety cap for any remaining original document read paths.
+- [x] Focused JVM tests for thresholds, stream limits and Thai/emoji.
+- [ ] GitHub Actions tests + APK build pending.
+- [ ] Real-phone ACTION_VIEW/EDIT URI provider tests pending.
+- [ ] Native typing, Save, large reader and V2 smoke test pending.
+
+## Safety
+No changes to Save/Save As, recovery, encoding writes, user files,
+the V2 debug-only reader or the normal input engine. No merging or
+release without authorization.
+
+## Next action
+Open draft PR and verify CI; phone-test file manager Open with BlakeEditor
+for 4 MiB, in-app Open and small-file editing.

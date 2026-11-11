@@ -80,6 +80,14 @@
                 <data android:mimeType="application/x-javascript" />
             </intent-filter>
         </activity>
+
+        <!-- Read-only paging also exists in release builds. External
+             ACTION_VIEW always enters MainActivity first for size checking. -->
+        <activity
+            android:name=".ui.large.LargeTextReaderActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BlakeEditor"
+            android:label="Large Text Reader" />
     </application>
 
 </manifest>
