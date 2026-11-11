@@ -33,7 +33,8 @@ data class RecoveryDraft(
     val sourceEncoding: String? = null,
     val sourceHadBom: Boolean = false,
     val sourceSha256: String? = null,
-    val savedToDisk: Boolean = false
+    val savedToDisk: Boolean = false,
+    val trashedAtMs: Long? = null
 ) {
     init {
         require(displayName.isNotBlank()) { "Display name must not be blank" }
@@ -46,6 +47,7 @@ data class RecoveryDraft(
         require(sourceEncoding == null || sourceEncoding in setOf(
             "UTF8", "UTF16_LE", "UTF16_BE", "WINDOWS_874", "TIS_620"
         )) { "Unsupported recorded encoding" }
+        require(trashedAtMs == null || trashedAtMs >= 0L) { "Invalid Trash timestamp" }
         if (savedToDisk) require(sourceUri != null && sourceSha256 != null && sourceEncoding != null) {
             "Saved document must have verified file metadata"
         }
@@ -72,12 +74,16 @@ data class LegacyMigrationReport(
 class RecoveryDraftStore(private val directory: File) {
     private companion object {
         const val MAGIC = 0x424C4B32 // BLK2
-        const val FORMAT_VERSION = 2
+        const val FORMAT_VERSION = 3
         const val MAX_METADATA_BYTES = 8192
         const val MAX_CONTENT_BYTES = 32 * 1024 * 1024
         const val MAX_FILE_BYTES = MAX_CONTENT_BYTES + MAX_METADATA_BYTES * 4
         const val EXTENSION = ".recovery"
         const val LEGACY_MARKER = "legacy-imported.marker"
+        const val UNTITLED_COUNTER = "next-untitled-number.counter"
+        val numberedUntitled = Regex("Untitled ([1-9][0-9]*)")
+        // Serializes reservations across store instances within the app process.
+        val numberReservationLock = Any()
     }
 
     @Synchronized
@@ -116,6 +122,49 @@ class RecoveryDraftStore(private val directory: File) {
             drafts.sortedByDescending { it.updatedAtMs },
             unreadable.sorted()
         )
+    }
+
+    /**
+     * Reserve a number before writing a new draft. A failed draft write may skip
+     * a number, but must never make it available to a later draft.
+     *
+     * Existing installs may have numbered records but no counter yet. Initialize
+     * above their highest recorded name, and fail closed if any recovery file
+     * cannot be checked. Never reconstruct an existing corrupt counter.
+     */
+    fun reserveUntitledNumber(): Result<Long> = runCatching {
+        synchronized(numberReservationLock) {
+            val counter = File(directory, UNTITLED_COUNTER)
+            val next = if (counter.exists()) {
+                require(counter.isFile && counter.length() in 1L..20L) {
+                    "Untitled counter is invalid; existing draft data was not changed"
+                }
+                val value = counter.readText(Charsets.US_ASCII)
+                require(Regex("[1-9][0-9]*").matches(value)) {
+                    "Untitled counter is invalid; existing draft data was not changed"
+                }
+                value.toLongOrNull() ?: error("Untitled counter is out of range")
+            } else {
+                val listing = list()
+                check(listing.unreadableFiles.isEmpty()) {
+                    "Cannot initialize Untitled numbering while recovery records are unreadable"
+                }
+                val highest = listing.drafts.mapNotNull { draft ->
+                    numberedUntitled.matchEntire(draft.displayName)
+                        ?.groupValues?.get(1)?.let { number ->
+                            number.toLongOrNull() ?: error("Existing Untitled number is out of range")
+                        }
+                }.maxOrNull() ?: 0L
+                check(highest < Long.MAX_VALUE) { "No more Untitled numbers are available" }
+                highest + 1L
+            }
+            check(next >= 1L && next < Long.MAX_VALUE) {
+                "No more Untitled numbers are available"
+            }
+            // The reservation is committed before creating the draft itself.
+            atomicWrite(counter, (next + 1L).toString().toByteArray(Charsets.US_ASCII))
+            next
+        }
     }
 
     /**
@@ -262,6 +311,8 @@ class RecoveryDraftStore(private val directory: File) {
             out.writeBoolean(draft.sourceHadBom)
             out.writeShortString(draft.sourceSha256.orEmpty())
             out.writeBoolean(draft.savedToDisk)
+            out.writeBoolean(draft.trashedAtMs != null)
+            if (draft.trashedAtMs != null) out.writeLong(draft.trashedAtMs)
         }
         return bytes.toByteArray()
     }
@@ -288,6 +339,7 @@ class RecoveryDraftStore(private val directory: File) {
             val sourceHadBom = if (version >= 2) input.readBoolean() else false
             val sourceHash = if (version >= 2) input.readShortString().ifBlank { null } else null
             val savedToDisk = if (version >= 2) input.readBoolean() else false
+            val trashedAtMs = if (version >= 3 && input.readBoolean()) input.readLong() else null
             require(input.read() == -1) { "Unexpected trailing data" }
             val decoder = Charsets.UTF_8.newDecoder()
                 .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
@@ -295,7 +347,7 @@ class RecoveryDraftStore(private val directory: File) {
             val content = decoder.decode(java.nio.ByteBuffer.wrap(contentBytes)).toString()
             RecoveryDraft(id, uri, name, language, content, selectionStart, selectionEnd,
                 scrollY, revision, updatedAt, sourceEncoding, sourceHadBom,
-                sourceHash, savedToDisk)
+                sourceHash, savedToDisk, trashedAtMs)
         }
 
     private fun DataOutputStream.writeShortString(s: String) {

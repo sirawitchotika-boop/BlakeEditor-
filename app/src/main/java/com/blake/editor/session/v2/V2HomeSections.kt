@@ -13,8 +13,8 @@ data class V2HomeSections(
 ) {
     companion object {
         fun from(listing: RecoveryListing): V2HomeSections = V2HomeSections(
-            continueWriting = listing.drafts.filterNot { it.savedToDisk },
-            recentlySaved = listing.drafts.filter { it.savedToDisk }
+            continueWriting = listing.drafts.filter { it.trashedAtMs == null && !it.savedToDisk },
+            recentlySaved = listing.drafts.filter { it.trashedAtMs == null && it.savedToDisk }
         )
     }
 }

@@ -1,5 +1,6 @@
 package com.blake.editor.session.v2
 
+import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,22 +12,45 @@ import org.junit.Test
 
 class DraftWorkspaceTest {
     private lateinit var workspace: DraftWorkspace
+    private lateinit var directory: File
 
     @Before
     fun setUp() {
-        val dir = Files.createTempDirectory("blake-v2-workspace").toFile()
-        workspace = DraftWorkspace(RecoveryDraftStore(dir))
+        directory = Files.createTempDirectory("blake-v2-workspace").toFile()
+        workspace = DraftWorkspace(RecoveryDraftStore(directory))
     }
 
     @Test fun newDocumentsGetSeparateRecoveryRecords() {
         val first = workspace.createUntitled().getOrThrow()
         val second = workspace.createUntitled().getOrThrow()
         assertNotEquals(first.id, second.id)
+        assertEquals("Untitled 1", first.displayName)
+        assertEquals("Untitled 2", second.displayName)
 
         val changed = workspace.edit(first, "first text", 10, 10, 0)
         assertTrue(workspace.returnHome(changed).isSuccess)
         assertEquals("first text", workspace.load(first.id).getOrThrow()?.content)
         assertEquals("", workspace.load(second.id).getOrThrow()?.content)
+    }
+
+    @Test fun reservedNumbersSurviveRenameDeletionAndNewStoreInstance() {
+        val first = workspace.createUntitled().getOrThrow()
+        val edited = workspace.edit(first, "private text", 7, 7, 14)
+        val renamed = edited.copy(displayName = "My Notes", revision = edited.revision + 1)
+        workspace.persist(renamed).getOrThrow()
+        assertEquals(first.id, workspace.load(first.id).getOrThrow()?.id)
+        assertEquals("private text", workspace.load(first.id).getOrThrow()?.content)
+
+        val second = workspace.createUntitled().getOrThrow()
+        assertEquals("Untitled 2", second.displayName)
+
+        // Simulate a later permanent deletion only inside this temporary test directory.
+        assertTrue(File(directory, first.id.value + ".recovery").delete())
+        val reopenedWorkspace = DraftWorkspace(RecoveryDraftStore(directory))
+        val third = reopenedWorkspace.createUntitled().getOrThrow()
+        assertEquals("Untitled 3", third.displayName)
+        assertNotEquals(first.id, third.id)
+        assertEquals("Untitled 2", reopenedWorkspace.load(second.id).getOrThrow()?.displayName)
     }
 
     @Test fun switchingPersistsOutgoingTextAndCursorBeforeLoading() {

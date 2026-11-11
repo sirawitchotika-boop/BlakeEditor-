@@ -44,6 +44,17 @@ class V2HomeSectionsTest {
         assertEquals(listOf("unreadable.recovery"), listing.unreadableFiles)
     }
 
+    @Test fun trashTaggedRecordsStayStoredButOffHome() {
+        val active = unsaved("Keep")
+        val trashed = unsaved("Hidden").copy(trashedAtMs = 55L)
+        val savedTrashed = saved("Old saved").copy(trashedAtMs = 56L)
+        val listing = RecoveryListing(listOf(active, trashed, savedTrashed), emptyList())
+        val sections = V2HomeSections.from(listing)
+        assertEquals(listOf(active), sections.continueWriting)
+        assertTrue(sections.recentlySaved.isEmpty())
+        assertEquals(3, listing.drafts.size)
+    }
+
     @Test fun everyUnsavedDraftStaysVisibleInContinueWriting() {
         val entries = listOf(unsaved("first"), unsaved("second"))
         val sections = V2HomeSections.from(RecoveryListing(entries, emptyList()))

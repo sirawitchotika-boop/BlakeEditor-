@@ -10,10 +10,11 @@ package com.blake.editor.session.v2
 class DraftWorkspace(private val store: RecoveryDraftStore) {
 
     fun createUntitled(): Result<RecoveryDraft> = runCatching {
+        val nextNumber = store.reserveUntitledNumber().getOrThrow()
         val draft = RecoveryDraft(
             id = DocumentIdentity.newUntitled(),
             sourceUri = null,
-            displayName = "Untitled",
+            displayName = "Untitled $nextNumber",
             language = "PLAIN_TEXT",
             content = ""
         )

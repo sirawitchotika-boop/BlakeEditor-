@@ -35,6 +35,42 @@ class RecoveryDraftStoreTest {
         assertTrue(store.list().unreadableFiles.isEmpty())
     }
 
+    @Test fun reservationIsDurableEvenIfTheDraftIsNotCreated() {
+        // A crash between counter reservation and draft creation must skip that number.
+        assertEquals(1L, store.reserveUntitledNumber().getOrThrow())
+        val next = DraftWorkspace(RecoveryDraftStore(File(dir, "v2")))
+            .createUntitled().getOrThrow()
+        assertEquals("Untitled 2", next.displayName)
+    }
+
+    @Test fun firstCounterStartsAbovePreexistingNumberedDrafts() {
+        val older = draft(DocumentIdentity.newUntitled(), "older")
+            .copy(displayName = "Untitled 8")
+        store.save(older).getOrThrow()
+        val newDraft = DraftWorkspace(store).createUntitled().getOrThrow()
+        assertEquals("Untitled 9", newDraft.displayName)
+        assertEquals("Untitled 8", store.load(older.id).getOrThrow()?.displayName)
+    }
+
+    @Test fun invalidCounterNeverSilentlyResetsOrChangesExistingDraft() {
+        val old = draft(DocumentIdentity.newUntitled(), "preserve me")
+        store.save(old).getOrThrow()
+        assertEquals(1L, store.reserveUntitledNumber().getOrThrow())
+        val counter = File(dir, "v2/next-untitled-number.counter")
+        counter.writeText("corrupt")
+        assertTrue(DraftWorkspace(store).createUntitled().isFailure)
+        assertEquals(old, store.load(old.id).getOrThrow())
+        assertEquals("corrupt", counter.readText())
+    }
+
+    @Test fun unreadableRecoveryBlocksUnsafeCounterInitialization() {
+        val broken = File(dir, "v2/new-00000000-0000-0000-0000-000000000000.recovery")
+        broken.parentFile!!.mkdirs()
+        broken.writeText("damaged")
+        assertTrue(store.reserveUntitledNumber().isFailure)
+        assertEquals("damaged", broken.readText())
+    }
+
     @Test fun sameExistingFileGetsSameIdentity() {
         val uri = "content://com.android.externalstorage.documents/document/primary%3ANotes%2Fhello.txt"
         val id = DocumentIdentity.forUri(uri)
