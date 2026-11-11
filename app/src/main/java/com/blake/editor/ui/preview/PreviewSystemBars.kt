@@ -12,7 +12,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 
 /**
- * Debug-only system-bar and camera-cutout treatment for Blake 2.0 screens.
+ * Shared system-bar and camera-cutout treatment for Blake 2.0 screens.
  *
  * AuraCalc taught us to style the launch theme and the running Activity.
  * Unlike Capacitor, native Blake also has to draw a real background behind

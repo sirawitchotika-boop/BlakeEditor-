@@ -59,3 +59,24 @@ jobs:
           name: BlakeEditor-Debug-APK
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
+
+      # Phone acceptance uses this *separate* install identity so a different
+      # GitHub Actions signing key cannot replace or erase the installed app.
+      # The normal debug APK above remains available and unchanged.
+      - name: Build Side-by-Side Isolated Test APK
+        run: ./gradlew clean assembleDebug -PisolatedTestApk=true --stacktrace
+
+      - name: Verify Isolated Test Package ID
+        run: |
+          set -e
+          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
+          test -n "$APK"
+          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
+          "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.isolatedtest'"
+
+      - name: Upload Isolated Test APK Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: BlakeEditor-Isolated-Test-APK
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7

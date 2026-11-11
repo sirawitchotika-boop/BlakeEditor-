@@ -25,7 +25,15 @@ android {
             )
         }
         debug {
-            applicationIdSuffix = ".debug"
+            // Optional side-by-side phone-test build. Never replace the
+            // installed original or normal debug app when signing keys differ.
+            // Standard debug remains com.blake.editor.debug.
+            applicationIdSuffix =
+                if (providers.gradleProperty("isolatedTestApk").orNull == "true") {
+                    ".isolatedtest"
+                } else {
+                    ".debug"
+                }
             isDebuggable = true
         }
     }

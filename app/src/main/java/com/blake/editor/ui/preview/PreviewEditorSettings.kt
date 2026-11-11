@@ -8,7 +8,13 @@ enum class PreviewTheme(val title: String) {
     LIGHT("Light"),
     DARK("Dark"),
     AMOLED("AMOLED"),
-    EYE_CARE("Eye Care")
+    EYE_CARE("Eye Care");
+
+    /** Pure policy: the chosen theme remains fixed unless it follows Android. */
+    fun resolvedForSystem(systemDark: Boolean): PreviewTheme =
+        if (this == FOLLOW_SYSTEM) {
+            if (systemDark) DARK else LIGHT
+        } else this
 }
 
 data class PreviewPalette(
@@ -26,6 +32,7 @@ data class PreviewPalette(
 )
 
 class PreviewEditorSettings(private val context: Context) {
+    // Keep this existing preference key: moving the class must not reset users' settings.
     private val prefs = context.getSharedPreferences(
         "blake_v2_preview_editor_settings", Context.MODE_PRIVATE
     )
@@ -51,11 +58,7 @@ class PreviewEditorSettings(private val context: Context) {
     fun palette(): PreviewPalette {
         val systemDark = (context.resources.configuration.uiMode and
             Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        val mode = when (theme) {
-            PreviewTheme.FOLLOW_SYSTEM ->
-                if (systemDark) PreviewTheme.DARK else PreviewTheme.LIGHT
-            else -> theme
-        }
+        val mode = theme.resolvedForSystem(systemDark)
         return when (mode) {
             PreviewTheme.LIGHT -> PreviewPalette(
                 0xFFF6F7FA.toInt(), 0xFFFFFFFF.toInt(), 0xFF202939.toInt(),
