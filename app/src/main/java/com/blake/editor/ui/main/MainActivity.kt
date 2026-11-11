@@ -159,9 +159,10 @@ class MainActivity : AppCompatActivity() {
         // Theme selections in V2 are shared, and Original retains its
         // existing DataStore for upgrades and previous settings.
         SharedEditorTheme.read(this)?.let { theme ->
-            if (viewModel.uiState.value.themeMode != theme) {
-                viewModel.setThemeMode(theme)
-            }
+            // The UI starts with a temporary default until DataStore loads.
+            // Always mirror the canonical choice: comparing only the initial
+            // UI state could let an older DataStore value override it later.
+            viewModel.setThemeMode(theme)
         }
         if (::nativeEditor.isInitialized) {
             scheduleSyntaxHighlight(viewModel.uiState.value.syntaxMode, immediate = true)
