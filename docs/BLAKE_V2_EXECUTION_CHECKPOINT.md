@@ -5,6 +5,16 @@
 **Repository:** `sirawitchotika-boop/BlakeEditor-`  
 **Checkpoint branch:** `docs/blake-v2-remaining-work-plan-2026-11-12` (draft PR #31; NOT `main`).
 
+## Phase B — data safety review (2026-11-12, Asia/Bangkok)
+
+- **Phase:** B; **Status:** `BLOCKED` for integration due to unresolved **P0 cross-instance recovery mutation race**. The review itself is complete at the inspected refs; Phase C may run its independent read-only audit, and Phase D must address the blocker. No phone acceptance.
+- **Live refs:** `main` = `309134c44834112b4d2b731c475dddad676f4049`. Draft heads #24 `4f6fccd0a5675a67aa2df38ad0b566ae31162a8d`, #25 `bb74f2e86f4ecd01e21f9b2722f3bb83a6faca7d`, #26 `81e8769e660d274688bed49cbb2fb5ad24d8409a`, #27 `10588024d9879c6bd347a9261fb8bd30cc39ba3d`, #29 `72ee83d240e440ded0b3126025da83f50581d544`, #30 `09f0004f27fe8209ff1223c18be47b76303af8d0`, #31 `727577a1711f34dc94c858406bf4d392acbc1e30`. All seven earlier exact-head Actions runs were SUCCESS; none verify integration.
+- **P0 unresolved, code-level concurrency finding:** `app/src/main/java/com/blake/editor/session/v2/RecoveryDraftStore.kt:102-114,257-405` protects save/rename/Trash/Restore/delete with **instance-local** `@Synchronized` only; companion object shares a lock for number reservation at `:99`, not other mutations. Two store instances pointing at the same private directory can both pass revision checks against the same old snapshot, then an older write or deletion can overwrite/remove a newer record. This is a demonstrable unsafe interleaving from the code, **not** a device-reproduced incident. `RecoveryDraftStoreTest.kt:393-416` tests sequential stale revisions, not simultaneous store instances. **Integration gate BLOCKED** pending a shared mutation lock or equivalent, with deterministic concurrent regression coverage and exact-head CI. No direct code rewrite of this P0 was attempted in B.
+- **Confirmed P1 availability bug fixed in separate draft [PR #32](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/32):** `RecoveryDraftStore.kt:213-240` initially refused the first Untitled counter reservation when only the **optional** `recent-shortcuts-hidden.index` was corrupt, despite all recovery files being readable. Minimal fix excludes that sidecar alone from the unsafe-counter check, while still rejecting corrupt `.recovery` records; adds two tests in `RecoveryDraftStoreTest.kt`. Branch `fix/v2-optional-recent-index-counter-2026-11-12` based on #30; exact head `6cc82d837dc19203cf35c92654aa1cbd2472d5b5`; only 2 files, 27 additions/1 deletion. **CI [43105595182](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43105595182): in progress when checked; WAITING_CI, NOT PASSED.** No local tests run.
+- **Reviewed safeguards (static, not phone-tested):** v1/v2/v3 recovery deserialization `RecoveryDraftStore.kt:505-566`; atomic fsynced temp writes `:585-605`; durable Untitled counter `:213-249`; revision guards, Trash and detached linked-file Restore `:257-405`; Recent visibility-only sidecar `:120-204`; SAF read/write and verified backup/readback `VerifiedDocumentSaver.kt:33-84`, `V2WorkspacePreviewActivity.kt:1270-1420`; strict UTF/Thai encoding/BOM `TextEncodingCodec.kt:40-129`. Existing focused tests cover these normal and error paths, but not cross-instance mutation races or provider/device behavior.
+- **Tests:** Existing #30 exact-head CI [43086206591](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43086206591) SUCCESS; #32 CI pending as above. Physical Android, real SAF provider, and integrated #24+#30 tests **NOT RUN**. No merges, release, launcher switch, or user-file changes.
+- **Next:** Phase C read-only UI audit; Phase D fix P0 cross-instance recovery mutation race in its own scoped draft PR, check #32 CI and exact-head checks. Phase E must remain BLOCKED until P0 fixed and all required CI green.
+
 ## Phase A — live inventory and PR baseline (2026-11-12 04:04 Asia/Bangkok)
 
 - **Phase:** A; **Status:** `PASSED` (read-only baseline; NOT an integration or phone acceptance).
@@ -40,7 +50,7 @@ All values are a snapshot. Revalidate before acting; do not mark external phone 
 | Phase | Proposed start (Asia/Bangkok) | Status | Main artifact / link |
 | --- | --- | --- | --- |
 | A — Baseline | 2026-11-12 04:00 | `PASSED` | [Phase A baseline in this checkpoint](#phase-a--live-inventory-and-pr-baseline-2026-11-12-0404-asiabangkok) |
-| B — Data safety review | 2026-11-12 04:45 | `NOT_STARTED` | — |
+| B — Data safety review | 2026-11-12 04:45 | `BLOCKED` (P0 race; #32 CI pending) | [P0 finding and P1 draft PR #32](#phase-b--data-safety-review-2026-11-12-asiabangkok) |
 | C — UI / maintenance review | 2026-11-12 05:30 | `NOT_STARTED` | — |
 | D — Minimal fixes | 2026-11-12 06:15 | `NOT_STARTED` | — |
 | E — Integration draft PR | 2026-11-12 07:00 | `NOT_STARTED` | — |
