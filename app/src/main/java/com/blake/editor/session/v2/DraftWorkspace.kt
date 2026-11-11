@@ -100,6 +100,20 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
     fun moveToTrash(id: DocumentIdentity, expectedRevision: Long): Result<RecoveryDraft> =
         store.moveToTrash(id, expectedRevision)
 
+    /** Restore only the private draft; linked files must be verified by the caller. */
+    fun restoreFromTrash(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        sourceMatches: Boolean
+    ): Result<DraftRestoreResult> =
+        store.restoreFromTrash(id, expectedRevision, sourceMatches)
+
+    /** Irreversible only after an explicit Trash confirmation in the UI. */
+    fun deleteTrashedPermanently(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = store.deleteTrashedPermanently(id, expectedRevision)
+
     fun persist(current: RecoveryDraft): Result<Unit> = store.save(current)
 
     /** The caller must not leave the editor when this returns a failure. */

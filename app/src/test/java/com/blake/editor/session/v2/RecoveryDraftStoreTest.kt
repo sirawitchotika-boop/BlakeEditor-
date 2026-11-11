@@ -194,6 +194,128 @@ class RecoveryDraftStoreTest {
         assertEquals(saved, store.load(saved.id).getOrThrow())
     }
 
+    @Test fun restoresUntitledDraftWithContentCursorScrollAndName() {
+        val original = RecoveryDraft(
+            id = DocumentIdentity.newUntitled(), sourceUri = null,
+            displayName = "Important", language = "MARKDOWN",
+            content = "Keep unsaved words 🌏", selectionStart = 3,
+            selectionEnd = 8, scrollY = 123, revision = 4
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 4).getOrThrow()
+        val result = store.restoreFromTrash(trashed.id, trashed.revision, false).getOrThrow()
+        assertFalse(result.recoveredAsCopy)
+        assertEquals(original.id, result.draft.id)
+        assertEquals(original.content, result.draft.content)
+        assertEquals(original.displayName, result.draft.displayName)
+        assertEquals(original.selectionStart, result.draft.selectionStart)
+        assertEquals(original.selectionEnd, result.draft.selectionEnd)
+        assertEquals(original.scrollY, result.draft.scrollY)
+        assertNull(result.draft.trashedAtMs)
+        assertEquals(result.draft, RecoveryDraftStore(File(dir, "v2"))
+            .load(original.id).getOrThrow())
+    }
+
+    @Test fun unchangedVerifiedLinkedFileRestoresTheSameDraftIdentity() {
+        val uri = "content://provider/document.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "document.txt", language = "PLAIN_TEXT",
+            content = "unsaved", sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 1).getOrThrow()
+        val restored = store.restoreFromTrash(trashed.id, trashed.revision, true).getOrThrow()
+        assertFalse(restored.recoveredAsCopy)
+        assertEquals(uri, restored.draft.sourceUri)
+        assertEquals(original.sourceSha256, restored.draft.sourceSha256)
+        assertEquals(original.id, restored.draft.id)
+        assertNull(restored.draft.trashedAtMs)
+    }
+
+    @Test fun changedLinkedSourceRestoresDetachedCopyAndKeepsOriginalTrash() {
+        val uri = "content://provider/document.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "document.txt", language = "PLAIN_TEXT",
+            content = "never lose unsaved data", selectionStart = 2,
+            selectionEnd = 5, scrollY = 48, revision = 3,
+            sourceEncoding = "UTF8", sourceHadBom = true,
+            sourceSha256 = "a".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 3).getOrThrow()
+        val result = store.restoreFromTrash(trashed.id, trashed.revision, false).getOrThrow()
+        assertTrue(result.recoveredAsCopy)
+        assertNotEquals(original.id, result.draft.id)
+        assertNull(result.draft.sourceUri)
+        assertNull(result.draft.sourceSha256)
+        assertEquals("Recovered — document.txt", result.draft.displayName)
+        assertEquals(original.content, result.draft.content)
+        assertEquals(original.selectionStart, result.draft.selectionStart)
+        assertEquals(original.selectionEnd, result.draft.selectionEnd)
+        assertEquals(original.scrollY, result.draft.scrollY)
+        assertEquals(original.sourceEncoding, result.draft.sourceEncoding)
+        assertEquals(original.sourceHadBom, result.draft.sourceHadBom)
+        assertFalse(result.draft.savedToDisk)
+        assertNull(result.draft.trashedAtMs)
+        assertEquals(trashed, store.load(original.id).getOrThrow())
+        val restarted = RecoveryDraftStore(File(dir, "v2"))
+        assertEquals(result.draft, restarted.load(result.draft.id).getOrThrow())
+        assertEquals(2, restarted.list().drafts.size)
+    }
+
+    @Test fun unverifiedLinkedSourceAlwaysRestoresDetachedEvenIfCallerSaysMatches() {
+        val uri = "content://provider/unknown.txt"
+        val original = RecoveryDraft(DocumentIdentity.forUri(uri), uri, "unknown.txt",
+            "PLAIN_TEXT", "preserve", revision = 3)
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 3).getOrThrow()
+        val restored = store.restoreFromTrash(trashed.id, trashed.revision, true).getOrThrow()
+        assertTrue(restored.recoveredAsCopy)
+        assertNull(restored.draft.sourceUri)
+        assertEquals(trashed, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun staleRestoreAndNonTrashDeletionFailWithoutChangingRecords() {
+        val original = draft(DocumentIdentity.newUntitled(), "important", 2)
+        store.save(original).getOrThrow()
+        assertTrue(store.restoreFromTrash(original.id, 2, false).isFailure)
+        assertTrue(store.deleteTrashedPermanently(original.id, 2).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        val trashed = store.moveToTrash(original.id, 2).getOrThrow()
+        assertTrue(store.restoreFromTrash(original.id, 2, false).isFailure)
+        assertTrue(store.deleteTrashedPermanently(original.id, 2).isFailure)
+        assertTrue(store.restoreFromTrash(DocumentIdentity.newUntitled(), 1, false).isFailure)
+        assertEquals(trashed, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun confirmedDeletionCanOnlyRemoveTrashedRecoveryRecord() {
+        val one = draft(DocumentIdentity.newUntitled(), "one")
+        val two = draft(DocumentIdentity.newUntitled(), "two")
+        store.save(one).getOrThrow()
+        store.save(two).getOrThrow()
+        val trashed = store.moveToTrash(one.id, one.revision).getOrThrow()
+        assertFalse(store.clearSavedRevision(one.id, trashed.revision).getOrThrow())
+        store.deleteTrashedPermanently(trashed.id, trashed.revision).getOrThrow()
+        assertNull(store.load(one.id).getOrThrow())
+        assertEquals(two, store.load(two.id).getOrThrow())
+        assertTrue(store.deleteTrashedPermanently(trashed.id, trashed.revision).isFailure)
+    }
+
+    @Test fun multipleIndependentDraftsMoveAndDeleteWithoutTouchingUnselected() {
+        val drafts = (1..3).map {
+            draft(DocumentIdentity.newUntitled(), "text $it")
+        }
+        drafts.forEach { store.save(it).getOrThrow() }
+        val moved = drafts.take(2).map { store.moveToTrash(it.id, it.revision).getOrThrow() }
+        assertEquals(2, store.list().drafts.count { it.trashedAtMs != null })
+        assertEquals(drafts[2], store.load(drafts[2].id).getOrThrow())
+        moved.forEach { store.deleteTrashedPermanently(it.id, it.revision).getOrThrow() }
+        assertEquals(listOf(drafts[2]), store.list().drafts)
+    }
+
     @Test fun sameExistingFileGetsSameIdentity() {
         val uri = "content://com.android.externalstorage.documents/document/primary%3ANotes%2Fhello.txt"
         val id = DocumentIdentity.forUri(uri)

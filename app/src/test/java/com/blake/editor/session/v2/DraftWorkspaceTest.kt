@@ -5,6 +5,7 @@ import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -79,6 +80,21 @@ class DraftWorkspaceTest {
         assertTrue(workspace.switchTo(other, linked.id).isFailure)
         assertEquals(moved, workspace.load(linked.id).getOrThrow())
         assertEquals(moved, V2HomeSections.from(workspace.list()).trash.single())
+    }
+
+    @Test fun workspaceRestoreAndExplicitDeletionStayScopedToRecovery() {
+        val first = workspace.createUntitled().getOrThrow()
+        val second = workspace.createUntitled().getOrThrow()
+        val original = workspace.edit(first, "keep this", 2, 5, 19)
+        workspace.persist(original).getOrThrow()
+        val moved = workspace.moveToTrash(first.id, original.revision).getOrThrow()
+        val restored = workspace.restoreFromTrash(moved.id, moved.revision, false).getOrThrow()
+        assertFalse(restored.recoveredAsCopy)
+        assertEquals("keep this", workspace.load(first.id).getOrThrow()?.content)
+        val movedAgain = workspace.moveToTrash(first.id, restored.draft.revision).getOrThrow()
+        workspace.deleteTrashedPermanently(movedAgain.id, movedAgain.revision).getOrThrow()
+        assertNull(workspace.load(first.id).getOrThrow())
+        assertEquals(second, workspace.load(second.id).getOrThrow())
     }
 
     @Test fun switchingPersistsOutgoingTextAndCursorBeforeLoading() {

@@ -64,6 +64,12 @@ data class RecoveryListing(
     val unreadableFiles: List<String>
 )
 
+/** A changed or unverifiable linked source is restored as a separate, unlinked copy. */
+data class DraftRestoreResult(
+    val draft: RecoveryDraft,
+    val recoveredAsCopy: Boolean
+)
+
 data class LegacyMigrationReport(
     val imported: Int,
     val alreadyPresent: Int,
@@ -233,6 +239,76 @@ class RecoveryDraftStore(private val directory: File) {
         }
 
     /**
+     * Restore an entire recovery snapshot, never the external Android file.
+     * The caller verifies source bytes against their original fingerprint.
+     *
+     * If a linked source changed, cannot be read, or lacks a known fingerprint,
+     * write a separately identified untitled recovery copy BEFORE returning.
+     * The original Trash record stays intact for manual review; never risk
+     * overwriting the real source file.
+     */
+    @Synchronized
+    fun restoreFromTrash(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        sourceMatches: Boolean
+    ): Result<DraftRestoreResult> = runCatching {
+        val current = readDraftFile(id) ?: error("Recovery draft is missing")
+        check(current.trashedAtMs != null) { "Draft is not in Trash" }
+        check(current.revision == expectedRevision) {
+            "Trash entry changed. Reload Trash and try again."
+        }
+        check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
+        val now = System.currentTimeMillis().coerceAtLeast(1L)
+        if (current.sourceUri == null ||
+            (sourceMatches && current.sourceSha256 != null && current.sourceEncoding != null)
+        ) {
+            val restored = current.copy(
+                trashedAtMs = null,
+                revision = current.revision + 1L,
+                updatedAtMs = maxOf(current.updatedAtMs, now)
+            )
+            save(restored).getOrThrow()
+            DraftRestoreResult(restored, recoveredAsCopy = false)
+        } else {
+            // This file can never silently regain a Save-to-original connection.
+            // Keep the old Trash record until the user explicitly removes it.
+            val recovered = current.copy(
+                id = DocumentIdentity.newUntitled(),
+                sourceUri = null,
+                displayName = ("Recovered — " + current.displayName).take(120),
+                sourceSha256 = null,
+                savedToDisk = false,
+                trashedAtMs = null,
+                revision = 1L,
+                updatedAtMs = now
+            )
+            save(recovered).getOrThrow()
+            DraftRestoreResult(recovered, recoveredAsCopy = true)
+        }
+    }
+
+    /**
+     * Only explicitly confirmed Trash actions may remove private recovery bytes.
+     * Checks identity, stored revision, and Trash state. Never touches Android
+     * documents, SAF URIs, saved-file metadata, or untrashed drafts.
+     */
+    @Synchronized
+    fun deleteTrashedPermanently(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = runCatching {
+        val current = readDraftFile(id) ?: error("Trash entry is missing")
+        check(current.trashedAtMs != null) { "Draft is not in Trash" }
+        check(current.revision == expectedRevision) {
+            "Trash entry changed. Reload Trash and try again."
+        }
+        if (!fileFor(id).delete()) {
+            throw IOException("Could not remove Trash recovery record")
+        }
+    }
+
+    /**
      * Only delete when the on-disk revision equals the revision that was
      * successfully written to the real file. Never clear newer unsaved edits.
      */
@@ -240,6 +316,7 @@ class RecoveryDraftStore(private val directory: File) {
     fun clearSavedRevision(id: DocumentIdentity, savedRevision: Long): Result<Boolean> =
         runCatching {
             val old = readDraftFile(id) ?: return@runCatching false
+            if (old.trashedAtMs != null) return@runCatching false
             if (old.revision != savedRevision) return@runCatching false
             if (!fileFor(id).delete()) throw IOException("Could not delete saved recovery draft")
             true
