@@ -1,24 +1,25 @@
-# Blake Editor — original editor native-input repair
+# Blake Editor — Original native code appearance
 
-## Phone blocker
-User confirms PR #13 latest APK still duplicates text and jumps the caret
-while typing and backspacing across English/Thai wrapped lines.
-PR #13 phone result: FAILED despite green CI. Result documented in PR #13.
+## Checkpoint (2026-11-11)
+- Feature branch: `feat/blake-original-native-code-appearance-2026-11-11`, based on main `a33426d46949b9f854bb2bb86b99c6b257c4fbb8`.
+- PR #14 keyboard fix is already merged; user previously passed native typing/caret/Save phone checks.
+- PR #15 large external text routing remains **draft, open, unmerged** as confirmed before this task. Its corrected phone suite was passed by Boss; this branch does not modify those files.
+- This branch does not merge or depend on PR #15.
 
-## New branch
-fix/blake-v1-native-input-default-2026-11-11
-Base main bd1f59fd7423b40cbe69b3d0f1f831b50d23f5af
+## Feature scope
+- [x] Restore code syntax coloring in **Blake Editor — Original** with foreground-only spans; never setText or change caret/selection to color code.
+- [x] Show a logical-line gutter for code files, not wrapped visual rows; no gutter for plain TXT/Markdown.
+- [x] Reuse production CodeSyntaxScanner/CodeLineIndex; debounce scans off main thread, limit scan size and rendered spans, and pause scanning in background.
+- [x] Use Dark/AMOLED/Eye Care theme colors; keep the existing native input and undo/redo/save paths.
+- [x] Add JVM regression tests for language choices, size limits, palettes, mixed scripts.
+- [ ] GitHub Actions debug unit tests, WebView regression, and debug APK build: **not yet checked**.
+- [ ] Android real-phone tests: **not yet run** (Thai combining text, wrapped Backspace, emoji, paste, Save As, preview, large-file Open with).
 
-- [x] Original V1 normal editing uses Android native EditText.
-- [x] WebView retained only for formatted Markdown Preview.
-- [x] Document-generation sync prevents re-applying typing to input.
-- [x] Native Undo/Redo history with bounded RAM.
-- [x] Line-column display and pure regression tests.
-- [ ] GitHub Actions unit tests and APK build pending.
-- [ ] Real phone wrap/backspace, Thai/emoji typing tests pending.
-- [ ] Recheck Save, Markdown Preview and separate V2 Preview on phone.
+## Known limits
+- Existing scanner highlights Kotlin, Java, JS, TS, Python, JSON, HTML, XML, CSS and YAML. Other code modes show line numbers without colors.
+- Color scanning is disabled over 80,000 UTF-16 units, or when token counts exceed 4,000; text remains editable.
+- Code gutter is enabled by file type; Original does not currently expose its own line-number toggle.
+- New code visual changes are **not phone-approved** until Boss confirms the APK tests.
 
-Trade-off: old Ace code colors and line-number gutter temporarily absent
-on the original launcher. Native V2 Preview retains those features.
-No changes to file writing or recovery. Keep draft PR unmerged until
-phone evidence confirms typing reliability.
+## Next action
+Open a draft PR, verify its exact CI run and APK, then request the five quick Original phone tests. Do not merge without Boss's express approval.
