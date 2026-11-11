@@ -44,6 +44,7 @@ import com.blake.editor.session.v2.DraftWorkspace
 import com.blake.editor.session.v2.RecoveryDraft
 import com.blake.editor.session.v2.RecoveryDraftStore
 import com.blake.editor.session.v2.VerifiedDocumentSaver
+import com.blake.editor.session.v2.V2HomeSections
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -285,8 +286,9 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             if (listing.drafts.isEmpty()) {
                 list.addView(text("No drafts yet. Tap New File.", 15f, MUTED))
             } else {
-                val unfinished = listing.drafts.filter { !it.savedToDisk }
-                val saved = listing.drafts.filter { it.savedToDisk }
+                val sections = V2HomeSections.from(listing)
+                val unfinished = sections.continueWriting
+                val saved = sections.recentlySaved
                 if (unfinished.isNotEmpty()) list.addView(text("Continue Writing", 17f, FG))
                 unfinished.forEach { draft ->
                     list.addView(button(draft.displayName + " · " + draft.language +
