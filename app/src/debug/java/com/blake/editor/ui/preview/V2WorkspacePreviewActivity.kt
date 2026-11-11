@@ -17,6 +17,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -31,6 +32,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.lifecycle.lifecycleScope
 import com.blake.editor.editor.v2.CodeSyntaxScanner
+import com.blake.editor.editor.v2.EditorFindReplace
+import com.blake.editor.editor.v2.TextMatch
 import com.blake.editor.file.DecodedTextFile
 import com.blake.editor.file.EncodingDetection
 import com.blake.editor.file.TextEncodingCodec
@@ -229,14 +232,18 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         root.removeAllViews()
         root.setBackgroundColor(BG)
         label("Blake 2.0 · Document", 21f, FG)
-        controls(listOf(
+        val documentActions = mutableListOf<Pair<String, () -> Unit>>(
             "Home" to { goHome() },
             "Switch" to { switcher() },
             "Save" to { saveCurrentFile() },
             "Save As" to { beginSaveAs() },
             "Store Draft" to { storeCurrent() },
             "Settings" to { showEditorSettings() }
-        ))
+        )
+        if (draft.language != "MARKDOWN" || editMarkdown) {
+            documentActions.add("Find / Replace" to { showFindReplace() })
+        }
+        controls(documentActions)
         label(draft.displayName, 18f, FG)
         label("Save updates the file · Store Draft keeps recovery only", 12f, MUTED)
         if (draft.language == "MARKDOWN") {
@@ -284,6 +291,9 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
         root.addView(field, LinearLayout.LayoutParams(-1, 0, 1f))
         input = field
+        if (CodeSyntaxScanner.isCode(draft.language)) {
+            showQuickSymbols(field)
+        }
         status = label(if (draft.savedToDisk) "Saved file · Revision " + draft.revision
             else "Recovery draft stored · Revision " + draft.revision, 12f, MUTED)
         field.addTextChangedListener(object : TextWatcher {
@@ -450,6 +460,199 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 showEditor(snapshot, editMarkdown = sourceMode)
             }
         }
+    }
+
+    /**
+     * Keeps symbol entry inside the native editor: no replacement TextView,
+     * clipboard insertion or extra input method that could disturb Thai IMEs.
+     */
+    private fun showQuickSymbols(field: PreviewCodeEditText) {
+        val keys = listOf(
+            "Tab" to "    ", "{" to "{", "}" to "}",
+            "(" to "(", ")" to ")", "[" to "[", "]" to "]",
+            ";" to ";", ":" to ":", "=" to "=",
+            "\"" to "\"", "'" to "'", "/" to "/", "\\" to "\\",
+            "<" to "<", ">" to ">", "#" to "#"
+        )
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        keys.forEach { (name, value) ->
+            strip.addView(button(name) {
+                if (field !== input || active == null) return@button
+                val current = field.text ?: return@button
+                val a = field.selectionStart.coerceIn(0, current.length)
+                val b = field.selectionEnd.coerceIn(0, current.length)
+                val start = minOf(a, b)
+                current.replace(start, maxOf(a, b), value)
+                field.setSelection((start + value.length).coerceAtMost(current.length))
+                field.requestFocus()
+            }.apply {
+                isFocusable = false
+                isFocusableInTouchMode = false
+                minWidth = dp(46)
+            })
+        }
+        root.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(strip)
+        })
+    }
+
+    private fun showFindReplace() {
+        if (busy) return
+        val field = input ?: return
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(6), dp(16), dp(6))
+        }
+        val query = EditText(this).apply {
+            hint = "Find text"
+            setSingleLine(true)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        }
+        val replacement = EditText(this).apply {
+            hint = "Replace with (can be empty)"
+            setSingleLine(true)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        }
+        val matchCase = CheckBox(this).apply {
+            text = "Match case"
+            isChecked = false
+        }
+        val result = TextView(this).apply {
+            text = "Searches this document only. Plain text, not regex."
+            setPadding(dp(6), dp(8), dp(6), dp(8))
+        }
+        panel.addView(query)
+        panel.addView(replacement)
+        panel.addView(matchCase)
+        panel.addView(result)
+        val buttonScroller = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        buttonScroller.addView(row)
+        panel.addView(buttonScroller)
+
+        fun select(match: TextMatch?) {
+            if (field !== input) return
+            if (match == null) {
+                result.text = "No match found"
+                return
+            }
+            field.setSelection(match.start, match.end)
+            field.bringPointIntoView(match.start)
+            result.text = "Selected match at character " + (match.start + 1)
+        }
+
+        row.addView(button("Previous") {
+            if (field !== input) return@button
+            val text = field.text?.toString().orEmpty()
+            val search = query.text.toString()
+            if (search.isEmpty()) {
+                result.text = "Type something to find"
+            } else {
+                select(EditorFindReplace.previous(text, search,
+                    minOf(field.selectionStart, field.selectionEnd),
+                    ignoreCase = !matchCase.isChecked))
+            }
+        })
+        row.addView(button("Next") {
+            if (field !== input) return@button
+            val text = field.text?.toString().orEmpty()
+            val search = query.text.toString()
+            if (search.isEmpty()) {
+                result.text = "Type something to find"
+            } else {
+                select(EditorFindReplace.next(text, search,
+                    maxOf(field.selectionStart, field.selectionEnd),
+                    ignoreCase = !matchCase.isChecked))
+            }
+        })
+        row.addView(button("Replace") {
+            if (field !== input) return@button
+            val editable = field.text ?: return@button
+            val text = editable.toString()
+            val search = query.text.toString()
+            if (search.isEmpty()) {
+                result.text = "Type something to find"
+                return@button
+            }
+            val start = minOf(field.selectionStart, field.selectionEnd)
+            val end = maxOf(field.selectionStart, field.selectionEnd)
+            if (!EditorFindReplace.selectionMatches(text, start, end,
+                    search, ignoreCase = !matchCase.isChecked)
+            ) {
+                select(EditorFindReplace.next(text, search, end,
+                    ignoreCase = !matchCase.isChecked))
+                result.text = "Select a match, then tap Replace again"
+                return@button
+            }
+            val insert = replacement.text.toString()
+            editable.replace(start, end, insert)
+            field.setSelection((start + insert.length).coerceAtMost(editable.length))
+            result.text = "Replaced one match. Tap Next to continue."
+        })
+        row.addView(button("Replace All") {
+            if (field !== input) return@button
+            val search = query.text.toString()
+            if (search.isEmpty()) {
+                result.text = "Type something to find"
+                return@button
+            }
+            val oldText = field.text?.toString() ?: return@button
+            val insert = replacement.text.toString()
+            val matchExactly = matchCase.isChecked
+            // Bound expensive searching off the UI thread; verify the source
+            // has not changed before applying this destructive edit.
+            lifecycleScope.launch {
+                result.text = "Checking matches..."
+                val plan = withContext(Dispatchers.Default) {
+                    runCatching {
+                        EditorFindReplace.replaceAll(
+                            oldText, search, insert, ignoreCase = !matchExactly
+                        )
+                    }
+                }
+                plan.onFailure {
+                    result.text = it.message ?: "Replace All failed"
+                    return@launch
+                }
+                val prepared = plan.getOrThrow()
+                if (prepared.count == 0) {
+                    result.text = "No matches found"
+                    return@launch
+                }
+                if (field !== input || field.text?.toString() != oldText) {
+                    result.text = "Document changed. Try Replace All again."
+                    return@launch
+                }
+                AlertDialog.Builder(this@V2WorkspacePreviewActivity)
+                    .setTitle("Replace all " + prepared.count + " matches?")
+                    .setMessage("This updates the editor text. Use Save to write the file.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Replace") { _, _ ->
+                        if (field !== input || field.text?.toString() != oldText) {
+                            result.text = "Document changed. No replacements made."
+                        } else {
+                            val oldCursor = field.selectionEnd.coerceAtLeast(0)
+                            val editable = field.text ?: return@setPositiveButton
+                            editable.replace(0, editable.length, prepared.text)
+                            field.setSelection(oldCursor.coerceAtMost(editable.length))
+                            result.text = "Replaced " + prepared.count + " matches"
+                        }
+                    }
+                    .show()
+            }
+        })
+        AlertDialog.Builder(this)
+            .setTitle("Find and Replace")
+            .setView(panel)
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun changed() {
