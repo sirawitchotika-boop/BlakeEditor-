@@ -30,6 +30,7 @@ import com.blake.editor.ui.large.LargeTextReaderActivity
 import com.blake.editor.editor.EditorController
 import com.blake.editor.editor.NativeDocumentSyncGuard
 import com.blake.editor.editor.NativeInputEditText
+import com.blake.editor.editor.NativeSyntaxColors
 import com.blake.editor.editor.NativeUndoHistory
 import com.blake.editor.editor.EditorEvent
 import com.blake.editor.intent.IncomingIntentParser
@@ -76,6 +77,22 @@ class MainActivity : AppCompatActivity() {
     private val documentSync = NativeDocumentSyncGuard()
     private val nativeUndo = NativeUndoHistory()
     private var applyingExternalText = false
+    private val highlightTask = Runnable { applyNativeSyntax() }
+    private fun scheduleHighlight() {
+        if (!::nativeEditor.isInitialized) return
+        nativeEditor.removeCallbacks(highlightTask)
+        nativeEditor.postDelayed(highlightTask, 450L)
+    }
+    private fun applyNativeSyntax() {
+        if (viewModel.uiState.value.isPreviewing) return
+        val text = nativeEditor.text ?: return
+        val dark = when (viewModel.uiState.value.themeMode) {
+            ThemeMode.LIGHT -> false
+            else -> true
+        }
+        NativeSyntaxColors.apply(text, viewModel.uiState.value.syntaxMode, dark)
+    }
+
     private var pendingOpenCheck: Job? = null
 
     private lateinit var btnNew: Button
@@ -231,6 +248,7 @@ class MainActivity : AppCompatActivity() {
                 val content = s?.toString().orEmpty()
                 nativeUndo.edited(content, SystemClock.uptimeMillis())
                 viewModel.onContentChanged(content)
+                scheduleHighlight()
             }
         })
         nativeEditor.onCursorMoved = { line, col ->
@@ -259,6 +277,7 @@ class MainActivity : AppCompatActivity() {
             nativeEditor.setSelection(offset)
             nativeEditor.scrollTo(0, 0)
             nativeUndo.reset(state.content)
+            scheduleHighlight()
         } finally {
             applyingExternalText = false
         }
@@ -275,6 +294,7 @@ class MainActivity : AppCompatActivity() {
             applyingExternalText = false
         }
         viewModel.onContentChanged(content)
+        scheduleHighlight()
     }
 
     private fun setupEditor() {
@@ -406,6 +426,7 @@ class MainActivity : AppCompatActivity() {
                     if (state.themeMode != lastAppliedTheme) {
                         lastAppliedTheme = state.themeMode
                         applyThemePalette(state.themeMode)
+                        scheduleHighlight()
                         editorController.execute(EditorCommand.SetTheme(state.themeMode))
                     }
 
@@ -434,6 +455,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (::nativeEditor.isInitialized) nativeEditor.removeCallbacks(highlightTask)
+        super.onDestroy()
     }
 
     private fun applyThemePalette(themeMode: ThemeMode) {
