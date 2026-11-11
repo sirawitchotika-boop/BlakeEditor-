@@ -58,6 +58,22 @@ jobs:
           grep -Fq 'v2EntryBar = findViewById(R.id.v2EntryBar)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
           grep -Fq 'v2EntryBar.setBackgroundColor(palette.surfaceColor)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
 
+      - name: Check V2 Beta Button Tap Target
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("app/src/main/res/layout/activity_main.xml").getroot()
+          a = "{http://schemas.android.com/apk/res/android}"
+          row = next(el for el in root if el.get(a + "id") == "@+id/v2EntryBar")
+          button = next(el for el in row if el.get(a + "id") == "@+id/btnOpenV2")
+          assert button.get(a + "layout_width") == "match_parent"
+          assert int(button.get(a + "layout_height").removesuffix("dp")) >= 48
+          assert button.get(a + "layout_marginStart") == "8dp"
+          assert button.get(a + "layout_marginEnd") == "8dp"
+          assert button.get(a + "text") == "@string/action_open_v2"
+          print("V2 Beta button is full-width with a >=48dp tap target.")
+          PY
+
       - name: Run Unit Tests & Build Debug APK
         run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
 

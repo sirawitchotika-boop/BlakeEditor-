@@ -217,17 +217,27 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="end"
-        android:paddingEnd="8dp"
+        android:gravity="center"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp"
         android:background="@color/bg_dark">
 
+        <!-- Wide, comfortable tap target, with breathing room on phones. -->
         <Button
             android:id="@+id/btnOpenV2"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:minHeight="40dp"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="6dp"
+            android:minHeight="48dp"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:includeFontPadding="false"
             android:text="@string/action_open_v2"
-            android:textSize="12sp"
+            android:textSize="14sp"
             android:contentDescription="@string/action_open_v2" />
     </LinearLayout>
 
