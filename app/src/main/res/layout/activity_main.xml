@@ -210,14 +210,16 @@
         android:textSize="11sp"
         android:text="@string/welcome_placeholder" />
 
-    <!-- Explicit opt-in. Original keeps the launcher and its own draft. -->
+    <!-- Explicit opt-in. Original keeps the launcher and its own draft.
+         MainActivity applies the same theme as the other toolbar rows. -->
     <LinearLayout
+        android:id="@+id/v2EntryBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="end"
         android:paddingEnd="8dp"
-        android:background="#1E1E1E">
+        android:background="@color/bg_dark">
 
         <Button
             android:id="@+id/btnOpenV2"

@@ -50,6 +50,14 @@ jobs:
       - name: Check Web Editor input and caret regression
         run: node app/src/test/js/editor-host-input-regression.test.cjs
 
+      - name: Check V2 Entry theme regression
+        run: |
+          # The V2 button row must follow the chosen theme, not stay black
+          # when Original is using a light/Eye Care palette.
+          grep -Fq 'android:id="@+id/v2EntryBar"' app/src/main/res/layout/activity_main.xml
+          grep -Fq 'v2EntryBar = findViewById(R.id.v2EntryBar)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
+          grep -Fq 'v2EntryBar.setBackgroundColor(palette.surfaceColor)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
+
       - name: Run Unit Tests & Build Debug APK
         run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
 

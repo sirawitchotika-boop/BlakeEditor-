@@ -73,6 +73,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rootContainer: View
     private lateinit var topBar: View
     private lateinit var fileBar: View
+    private lateinit var v2EntryBar: View
     private lateinit var tvFileName: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvEditorInfo: TextView
@@ -106,6 +107,7 @@ class MainActivity : AppCompatActivity() {
         rootContainer = findViewById(R.id.rootContainer)
         topBar = findViewById(R.id.topBar)
         fileBar = findViewById(R.id.fileBar)
+        v2EntryBar = findViewById(R.id.v2EntryBar)
         tvFileName = findViewById(R.id.tvFileName)
         tvStatus = findViewById(R.id.tvStatus)
         tvEditorInfo = findViewById(R.id.tvEditorInfo)
@@ -535,6 +537,7 @@ class MainActivity : AppCompatActivity() {
         rootContainer.setBackgroundColor(palette.surfaceColor)
         topBar.setBackgroundColor(palette.surfaceColor)
         fileBar.setBackgroundColor(palette.surfaceColor)
+        v2EntryBar.setBackgroundColor(palette.surfaceColor)
         tvStatus.setBackgroundColor(palette.surfaceColor)
         webViewEditor.setBackgroundColor(palette.backgroundColor)
         nativeEditor.setBackgroundColor(palette.backgroundColor)
