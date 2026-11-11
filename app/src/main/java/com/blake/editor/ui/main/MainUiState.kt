@@ -8,6 +8,8 @@ data class MainUiState(
     val currentUri: Uri? = null,
     val fileName: String = "untitled.txt",
     val content: String = "",
+    /** Changes only when a different document is loaded or New is pressed. */
+    val documentGeneration: Long = 0L,
     val syntaxMode: SyntaxMode = SyntaxMode.PLAIN_TEXT,
     val themeMode: ThemeMode = ThemeMode.DARK,
     val isDirty: Boolean = false,

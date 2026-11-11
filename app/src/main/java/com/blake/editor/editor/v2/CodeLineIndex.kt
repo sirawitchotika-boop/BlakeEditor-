@@ -31,4 +31,10 @@ class CodeLineIndex {
         val index = starts.binarySearch(offset.coerceAtLeast(0))
         return if (index >= 0) index + 1 else -index - 1
     }
+
+    /** First UTF-16 code unit of the logical line containing this offset. */
+    fun lineStartAt(offset: Int): Int {
+        val line = lineAt(offset)
+        return starts[(line - 1).coerceIn(0, starts.lastIndex)]
+    }
 }

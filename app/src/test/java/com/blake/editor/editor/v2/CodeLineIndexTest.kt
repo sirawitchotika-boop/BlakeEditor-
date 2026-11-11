@@ -6,6 +6,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CodeLineIndexTest {
+    @Test fun nativeEditorCanFindLogicalColumnWithoutFullTextCopy() {
+        val source = "first line\nThai สวัสดีครับ 🌏\n"
+        val index = CodeLineIndex().apply { rebuild(source) }
+        val start = source.indexOf("Thai")
+        val emojiEnd = source.indexOf("🌏") + 2
+        assertEquals(start, index.lineStartAt(start))
+        assertEquals(emojiEnd - start + 1, emojiEnd - index.lineStartAt(emojiEnd) + 1)
+        assertEquals(source.length, index.lineStartAt(source.length))
+    }
+
     @Test fun lfAndCrLfEachStartOneNewLine() {
         val source = "one\nThai สวัสดี\r\nthird"
         val index = CodeLineIndex().apply { rebuild(source) }
