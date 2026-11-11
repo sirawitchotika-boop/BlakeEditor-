@@ -1,77 +1,65 @@
-# Blake Editor 2.0 — remaining work and execution plan
+# Blake Editor 2.0 — complete remaining work plan
 
-**Status: planning document only. No tasks are scheduled and no code merge or release is authorized.**
-**Repository:** `sirawitchotika-boop/BlakeEditor-`
-**Verified checkpoint:** November 12, 2026
-**Read next:** [Execution checkpoint](BLAKE_V2_EXECUTION_CHECKPOINT.md)
+**Project:** \`sirawitchotika-boop/BlakeEditor-\`  
+**Planning snapshot:** November 12, 2026; refresh repository facts at every run.  
+**Mode:** Six **one-time**, bounded agent phases, PR-only tests, then a separate **human full gate**. **No actual ChatGPT Tasks are created by this document.**  
+**Execution instructions:** [Six-phase agent runbook](BLAKE_V2_SIX_PHASE_AGENT_RUNBOOK.md)  
+**Handoff status:** [Execution checkpoint](BLAKE_V2_EXECUTION_CHECKPOINT.md)
 
-## What is already built?
+## Verified repository status
 
-The merged Original editor and V2 foundation cover native text/Thai/emoji input, code view, editor tools, settings, Markdown, bounded large-file reading, safe Save / Save As, encoding, recovery, and shared V2 components. Original remains the protected production launcher.
+- Protected Original remains the normal release launcher on \`main\`, observed at \`309134c44834112b4d2b731c475dddad676f4049\`.
+- V2 input, code tools, settings, Markdown reader, large-file read-only routing, backup-aware Save / Save As, encoding, and recovery foundations are already implemented in earlier merged PRs. Source and current tests take priority over stale historical docs.
+- **PR #24** (optional V2 Beta entry) is open, draft, and parallel to the draft-management stack. Earlier exact-head CI passed, but combination with all other features is NOT tested.
+- Draft-management stack is **#25 → #26 → #27 → #29 → #30**. All are open draft PRs and unmerged as of the snapshot.
+- Boss reported phone **PASS 4/4 for #25** and **PASS 5/5 for #26, #27, and #29**.
+- **PR #30** adds safe Remove from Recent and a fixed Trash header. Exact head \`09f0004f27fe8209ff1223c18be47b76303af8d0\`, Actions run \`43086206591\` = **SUCCESS**. **Boss has not yet reported its phone checks.** Defer them to the final human gate; do not claim they passed.
+- Closed duplicate **PR #28** is unmerged; never reapply it.
+- **PR #31** carries this documentation on its own unmerged branch; do not mistake it for a code integration PR.
 
-Draft-management milestones are implemented in **open, unmerged draft PRs**:
+## What is left?
 
-| Work | PR | CI | Physical phone |
+There are no required new product features beyond the open stack if review finds it safe. The remaining work is **targeted review, real bug fixes only when needed, combined PR verification, and the final human decision**. Do not create artificial work to fill scheduled time.
+
+| Phase | What the agent does | Output | Gate |
 | --- | --- | --- | --- |
-| Optional V2 beta entry and theme handoff | #24 | Passed on the current PR head at earlier verification | Exact final integration still needs review |
-| Durable Untitled numbering and recovery metadata | #25 | Passed | Boss: PASS 4/4 |
-| Rename Draft | #26 | Passed | Boss: PASS 5/5 |
-| Move to Trash and document-card spacing | #27 | Passed | Boss: PASS 5/5 |
-| Multi-select, Restore, permanent delete | #29 | Passed | Boss: PASS 5/5 |
-| Recent-file shortcut removal and pinned Trash button | #30 | **Passed** at `09f0004f27fe8209ff1223c18be47b76303af8d0`, run `43086206591` | **Not yet reported** |
+| **A — Inventory & PR baseline** | Re-read this plan, master workflow skills, live PRs, branches, CI; map dependency and identify known risks | Verified status matrix + checkpoint | Read-only; no app changes |
+| **B — Data safety review** | Review recovery, counters, Trash/Restore, Recent shortcut index, Save/SAF/encoding invariants; identify critical regression tests | Findings with file/line evidence, severity, and tests to add | Do not proceed past unresolved data-loss risk |
+| **C — UI/maintenance review** | Review fixed Trash header, selection/scroll, Back/lifecycle, Original and external-file routing, CI security and readability | Findings + precise fix queue | Only evidenced blockers warrant code edits |
+| **D — Targeted fix & PR checks** | Fix one highest-priority confirmed blocker with focused tests in a separate draft PR; otherwise report no fix needed | Fix draft PR with CI state, or clear \`NO_FIX_REQUIRED\` | No unrelated rewrites or new features |
+| **E — Nonproduction integration** | If B–D safe, prepare **one staged integration draft PR** combining parallel #24 with the #25→#30 stack; do not merge individual PRs or touch release defaults | Integration PR or detailed blocked/conflict matrix | Exact-head CI must be requested; no production switch |
+| **F — Automated final review / human gate packet** | Verify exact integrated PR head, run/inspect unit, regression, release, manifest, isolated APK checks, review blockers; prepare phone/full gate checklist | \`READY_FOR_HUMAN_GATE\`, \`WAITING_CI\`, or \`BLOCKED\` with evidence | **No physical phone test, merge, launcher promotion, or release** |
 
-Historical merged work is in PRs #1–#23. PR #28 was a duplicate and is closed without merge. `main` was `309134c44834112b4d2b731c475dddad676f4049` when this plan was written. **Recheck all GitHub state on every execution**, because this document is a dated snapshot.
+**Stopping early is a valid outcome.** If a phase is blocked or CI is still running, the next dependent phase records the blocker instead of guessing completion. The six appointments do **not** guarantee the whole project will be finished in one morning. Schedule additional one-off tasks only with a later explicit decision.
 
-### Can we simply test and finish?
+## PR-only verification allowed in these six phases
 
-**Possibly for the draft-management feature.** If PR #30 passes its remaining phone checks and a short data-safety review finds no blockers, the feature itself may be complete. Do **not** invent extra feature milestones to fill a schedule.
+- Read static diffs, code and existing unit tests, GitHub Checks/Actions logs; add narrow JVM tests where authorized.
+- For changed branches, use **new draft PRs** and verify \`testDebugUnitTest assembleDebug\`, existing input/caret regression, \`assembleRelease\` (not published), release launcher/reader asset checks and the isolated test package ID on the exact commit.
+- Recheck checks after every new commit; never reuse a green run from an older SHA.
+- If CI remains pending at the phase boundary: checkpoint \`WAITING_CI\`, do not claim success.
+- Phone testing, performance profiling, physical device behavior and production signing **are not executed** by scheduled PR-only runs. They belong to the later full gate.
 
-**For the whole Blake Editor 2.0 app**, there are still separate integration and release decisions: PR #24 is parallel to the stacked PRs #25 → #26 → #27 → #29 → #30. CI passes on separate PRs do not prove their **combined build** is safe. Original must not be replaced or released without explicit Boss approval.
+## Code review and maintenance priorities
 
-## What remains? Small, ordered work packages
+**P0 data loss:** persistent recovery files and v1/v2/v3 compatibility, crash-safe atomic writes, corrupt files retained, revision races and concurrent callbacks, never-reused Untitled numbering, Trash confirmation and batch partial failure, exact cursor/selection/scroll restoration, conflict-safe detached \`Recovered — filename\`, no blind Save to linked files, and no external file deletion.
 
-| Phase | Required? | Scope of one bounded execution | Completion / stop condition |
-| --- | --- | --- | --- |
-| A — Final PR #30 phone acceptance | **Required, human** | Boss tests pinned Trash, Select/Remove from Recent, restart, reopening hidden files, and unchanged real-file contents | Record PASS/FAIL; on FAIL, a separate small fix PR and new test APK |
-| B — Code review: recovery and files | **Required before integration** | Review latest stacked PR changes for atomic recovery, revision races, corruption, counters, lost unsaved text, Restore conflicts, real file writes and Save As | Short findings with severity and direct file/line references; add focused tests only for confirmed gaps |
-| C — Code review: UI, build and maintenance | **Required before integration** | Review fixed header/scrolling, checkbox confirmation, duplicate names, navigation, lifecycle, access to Original, CI/test coverage, and stale docs | Short findings; classify **blocking**, **nonblocking**, and **optional** |
-| D — Fix blocking findings | **Only if needed** | Fix **one well-defined problem** per execution, in a separate draft PR; update focused tests and verify exact-head CI | No unresolved high-severity issues; do not expand scope just because time is available |
-| E — Integration planning | **Required** | Review ancestry and conflicts between **parallel** #24 and **stacked** #25/#26/#27/#29/#30; propose safe sequence, staging branch, rollback strategy | Written dependency/conflict report; no merge or launcher change |
-| F — Combined integration build | **Required if Boss authorizes staging** | Prepare a nonproduction integration **draft PR** on a separate branch containing approved changes; preserve Original; run full automated checks | Exact-head CI passes and isolated test APK is available; no automatic merge |
-| G — Full phone acceptance | **Required, human** | Boss tests combined build: Original, V2 Home, draft recovery, Trash, Recent, Save, code, Markdown, Thai/emoji, external files, large files, themes and restart | Record independent PASS/FAIL on **exact combined APK** |
-| H — Release or stop at beta | **Explicit Boss decision** | Review release checklist, safety/rollback, accessibility, performance, signing, promotion gate, and any unresolved issues | Boss decides **keep beta**, **approve merges**, **promote launcher**, or **release**. These are separate permissions |
+**P1 app integrity:** Recent shortcut index must hide lists only, never remove saved file or recovery data; Android SAF permissions; strict encoding/BOM; SHA/fingerprint, backups and verified writes; >2 MiB external file open routes to read-only pager; Original remains default and stable.
 
-**Do not promise a fixed number of code-fix phases.** If B and C find no blockers, skip D. If the combined build passes, do not create an unnecessary polish project. Any new feature request or larger redesign goes into a separate optional backlog.
+**P1 UI/lifecycle:** fixed Trash position above document \`ScrollView\`, no move triggered by scroll, multi-select and confirmation, navigation, keyboard/back, resume/recreation, duplicate labels with stable IDs, code editor/Markdown themes.
 
-## Code review and maintenance checklist
+**P2 maintainability:** focused test gaps, CI stability, release manifest, artifacts, reasonable Kotlin code size, low-risk cleanups, stale documents and dead code. No whole-project refactor unless an actual blocker demands it.
 
-Use a *short* review per subsystem; do not scan the full repository without purpose.
+**Optional only:** deep energy profiling, broad OEM device matrix, icon/mask refinements, major visual redesign and new editing features. Leave these out of the automatic plan unless they block the agreed final gate.
 
-- **Storage/data:** old recovery v1/v2/v3 compatibility, untouched corrupt files, monotonic Untitled counter, rename identity, Trash snapshots and bulk partial failures, safe detached copies on conflicts, hidden Recent shortcut index, crash/restart and stale revision tests.
-- **Real file safety:** separate Save/Save As behavior, SHA/fingerprint checks, BOM/Thai encoding, SAF permissions, external Android Open With, >2 MiB read-only route, no unrequested source writes or deletion.
-- **UI/device:** scrolling never triggers an action; Trash stays fixed while Recent grows; Home categories don't duplicate entries; accessible labels/contrast, touch targets, Android Back and keyboard, selection/caret/scroll on rotate/restart, Original default remains unchanged.
-- **Build/security/maintenance:** exact-head unit and regression checks, release variant without V2 launcher surprise, unique isolated APK package, scoped dependencies, stale documentation, possible dead code and duplicated logic; prioritize concrete bugs over aesthetic refactors.
-- **Optional after stability:** deeper battery profiling, extended device/OS matrix, icon mask refinement and broader accessibility polish unless a blocking defect appears.
+## Final human gate (NOT one of the six agent tasks)
 
-## Running future one-time tasks
+After Phase F passes, Boss decides when to test the **exact integrated isolated APK**: Thai/English/emoji input and cursor, Original untouched, V2 Home/recovery/rename/Trash/bulk selection/Restore, fixed header and Recent shortcut behavior, safe external TXT Save/Save As, Markdown/code, large-file read-only open, theme, cold start and background restore. Test disposable copies only.
 
-This plan is suitable for later **single-use Create Task instructions** in any ChatGPT conversation. **No actual times are set here.** Every separately created task must state its **phase ID**, allowlist of actions, and where this document and the checkpoint are stored in GitHub.
+Approval to **merge PRs**, **switch production default**, and **publish a release** are **three separate explicit decisions**, never inferred from a phone PASS report. Keep old installed apps, files and app data.
 
-Each execution must:
+## Scheduling and handoff
 
-1. Fetch this document and [the checkpoint](BLAKE_V2_EXECUTION_CHECKPOINT.md) from their **explicit GitHub branch/ref**. Do not rely on the chat transcript, previous task output, or uploaded files.
-2. Inspect the live repo, PR heads, checks, and approval status. Detect if the phase is already completed; do not duplicate commits.
-3. Confirm predecessor dependencies. If the previous phase is `BLOCKED`, `PARTIAL`, `WAITING_CI`, or awaiting a phone result, **do not silently continue to a dependent phase**.
-4. Do **one bounded work package**: one review area, or one small fix + tests. Prefer modest diffs (roughly 1–4 core files plus tests) and a concise response. If too large, stop at a clean checkpoint rather than truncating or claiming completion.
-5. Test what is possible, report the **exact commit and run link**, and make any code change on its own new branch and **draft PR** only if that action was authorized for that task.
-6. Update the checkpoint if authorized and possible, using safe GitHub ref/commit checks. If it cannot be updated, report the blocker, PR link and current exact SHA. No speculative success or pretending a CI run/phone test passed.
-7. Finish with no more than ~250 words: **Phase / Status / Commit / Done / Tests / Blocker / Next**; provide 3–5 phone checks only for a verified new isolated APK.
+Proposed **November 12, 2026, Asia/Bangkok**, with 30-minute budget per phase and 15-minute gaps: A 04:00; B 04:45; C 05:30; D 06:15; E 07:00; F 07:45. **These are proposals, not created tasks.** Separate one-time Create Tasks should be created in another chat from [the runbook](BLAKE_V2_SIX_PHASE_AGENT_RUNBOOK.md).
 
-**Hard boundaries:** No automatic merge, release, production deployment, changing Original default or external file routing, force pushing unrelated branches, deleting real files, clearing installed app data, or guessing human approval. Scheduled ChatGPT runs have separate execution contexts and may lack GitHub/Codex permissions; detect this rather than pretending they ran.
-
-## Decision log and future scheduling
-
-- **Scheduling:** NOT STARTED. Boss will review the roadmap first and choose whether any one-time tasks are necessary.
-- **Execution permission:** This planning document does not authorize code changes or merges. Individual future task prompts must grant their own limited permissions.
-- **Human gates:** Phone acceptance and production/release approval remain with Boss.
-- **Fastest safe path:** Finish PR #30 phone checks → two targeted reviews → fix only real blockers → plan/test combined build → Boss makes the final release decision.
+Every run must read the plan and [checkpoint](BLAKE_V2_EXECUTION_CHECKPOINT.md) from the explicit branch \`docs/blake-v2-remaining-work-plan-2026-11-12\`, reverify live GitHub, do only its phase, and save short objective evidence. Do not rely on this chat's memory. If it cannot read or write GitHub or a task tool cannot use a coding environment, mark \`BLOCKED\` honestly and stop.
