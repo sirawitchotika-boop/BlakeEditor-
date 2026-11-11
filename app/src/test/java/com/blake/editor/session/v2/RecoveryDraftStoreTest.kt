@@ -316,6 +316,70 @@ class RecoveryDraftStoreTest {
         assertEquals(listOf(drafts[2]), store.list().drafts)
     }
 
+    @Test fun recentRemovalHidesShortcutButNeverChangesRecoveryOrRealFile() {
+        val uri = "content://example/recent/report.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "report.txt", language = "PLAIN_TEXT",
+            content = "original content", selectionStart = 3,
+            selectionEnd = 7, scrollY = 37, revision = 4,
+            sourceEncoding = "UTF8", sourceSha256 = "a".repeat(64),
+            savedToDisk = true
+        )
+        store.save(saved).getOrThrow()
+        store.hideFromRecent(saved.id, saved.revision).getOrThrow()
+        assertEquals(saved, store.load(saved.id).getOrThrow())
+        val reopened = RecoveryDraftStore(File(dir, "v2"))
+        val listing = reopened.list()
+        assertEquals(listOf(saved), listing.drafts)
+        assertTrue(listing.hiddenRecentIds.contains(saved.id))
+        assertTrue(V2HomeSections.from(listing).recentlySaved.isEmpty())
+        reopened.showInRecent(saved.id).getOrThrow()
+        assertEquals(listOf(saved), V2HomeSections.from(reopened.list()).recentlySaved)
+    }
+
+    @Test fun recentRemovalRejectsStaleMissingUnsavedAndTrashWithoutChanges() {
+        val uri = "content://example/recent/saved.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "saved.txt", language = "PLAIN_TEXT",
+            content = "safe", sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = true,
+            revision = 6
+        )
+        val unsaved = draft(DocumentIdentity.newUntitled(), "not saved", 2)
+        store.save(saved).getOrThrow()
+        store.save(unsaved).getOrThrow()
+        assertTrue(store.hideFromRecent(saved.id, 5).isFailure)
+        assertTrue(store.hideFromRecent(unsaved.id, 2).isFailure)
+        assertTrue(store.hideFromRecent(DocumentIdentity.newUntitled(), 1).isFailure)
+        assertEquals(saved, store.load(saved.id).getOrThrow())
+        assertEquals(unsaved, store.load(unsaved.id).getOrThrow())
+        assertTrue(store.list().hiddenRecentIds.isEmpty())
+        val trashed = store.moveToTrash(unsaved.id, 2).getOrThrow()
+        assertTrue(store.hideFromRecent(trashed.id, trashed.revision).isFailure)
+        assertEquals(trashed, store.load(trashed.id).getOrThrow())
+    }
+
+    @Test fun corruptRecentIndexIsNeverOverwrittenAndRecoveryStillLoads() {
+        val uri = "content://example/recent/keep.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "keep.txt", language = "PLAIN_TEXT",
+            content = "never delete", sourceEncoding = "UTF8",
+            sourceSha256 = "b".repeat(64), savedToDisk = true
+        )
+        store.save(saved).getOrThrow()
+        val index = File(dir, "v2/recent-shortcuts-hidden.index")
+        index.writeText("damaged sidecar")
+        assertTrue(store.hideFromRecent(saved.id, 1).isFailure)
+        assertTrue(store.showInRecent(saved.id).isFailure)
+        val listing = store.list()
+        assertTrue(listing.unreadableFiles.contains("recent-shortcuts-hidden.index"))
+        assertEquals(saved, listing.drafts.single())
+        assertEquals("damaged sidecar", index.readText())
+    }
+
     @Test fun sameExistingFileGetsSameIdentity() {
         val uri = "content://com.android.externalstorage.documents/document/primary%3ANotes%2Fhello.txt"
         val id = DocumentIdentity.forUri(uri)

@@ -57,6 +57,22 @@ class V2HomeSectionsTest {
         assertEquals(3, listing.drafts.size)
     }
 
+    @Test fun hidingRecentShortcutDoesNotHideUnsavedRecoveryOrTrash() {
+        val savedOne = saved("one")
+        val savedTwo = saved("two")
+        val unsaved = unsaved("editing")
+        val trashed = unsaved("trashed").copy(trashedAtMs = 100L)
+        val listing = RecoveryListing(
+            listOf(savedOne, unsaved, savedTwo, trashed),
+            emptyList(), setOf(savedOne.id, unsaved.id)
+        )
+        val sections = V2HomeSections.from(listing)
+        assertEquals(listOf(savedTwo), sections.recentlySaved)
+        assertEquals(listOf(unsaved), sections.continueWriting)
+        assertEquals(listOf(trashed), sections.trash)
+        assertEquals(4, listing.drafts.size)
+    }
+
     @Test fun everyUnsavedDraftStaysVisibleInContinueWriting() {
         val entries = listOf(unsaved("first"), unsaved("second"))
         val sections = V2HomeSections.from(RecoveryListing(entries, emptyList()))

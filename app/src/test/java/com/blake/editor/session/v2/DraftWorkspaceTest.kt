@@ -97,6 +97,19 @@ class DraftWorkspaceTest {
         assertEquals(second, workspace.load(second.id).getOrThrow())
     }
 
+    @Test fun explicitlyReopeningHiddenSavedFileRestoresItsRecentShortcut() {
+        val uri = "content://example.provider/doc/recent.txt"
+        val saved = workspace.openFromFile(uri, "recent.txt", "PLAIN_TEXT",
+            "original", encoding = "UTF8", sourceSha256 = "c".repeat(64)).getOrThrow()
+        assertTrue(saved.savedToDisk)
+        workspace.removeFromRecent(saved.id, saved.revision).getOrThrow()
+        assertTrue(V2HomeSections.from(workspace.list()).recentlySaved.isEmpty())
+        val reopened = DraftWorkspace(RecoveryDraftStore(directory))
+        assertEquals(saved, reopened.openFromFile(uri, "recent.txt", "PLAIN_TEXT",
+            "original", encoding = "UTF8", sourceSha256 = "c".repeat(64)).getOrThrow())
+        assertEquals(listOf(saved), V2HomeSections.from(reopened.list()).recentlySaved)
+    }
+
     @Test fun switchingPersistsOutgoingTextAndCursorBeforeLoading() {
         val first = workspace.createUntitled().getOrThrow()
         val second = workspace.createUntitled().getOrThrow()

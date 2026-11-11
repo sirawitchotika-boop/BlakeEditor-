@@ -61,7 +61,10 @@ data class RecoveryDraft(
 
 data class RecoveryListing(
     val drafts: List<RecoveryDraft>,
-    val unreadableFiles: List<String>
+    val unreadableFiles: List<String>,
+    // Separate private shortcut metadata. Never used to decide whether a
+    // recovery record should be deleted, overwritten, or opened.
+    val hiddenRecentIds: Set<DocumentIdentity> = emptySet()
 )
 
 /** A changed or unverifiable linked source is restored as a separate, unlinked copy. */
@@ -87,6 +90,9 @@ class RecoveryDraftStore(private val directory: File) {
         const val EXTENSION = ".recovery"
         const val LEGACY_MARKER = "legacy-imported.marker"
         const val UNTITLED_COUNTER = "next-untitled-number.counter"
+        const val HIDDEN_RECENT_INDEX = "recent-shortcuts-hidden.index"
+        const val HIDDEN_RECENT_HEADER = "BLK-RECENT-HIDDEN-V1\n"
+        const val MAX_HIDDEN_RECENT_BYTES = 1024 * 1024
         val numberedUntitled = Regex("Untitled ([1-9][0-9]*)")
         // Serializes reservations across store instances within the app process.
         val numberReservationLock = Any()
@@ -124,10 +130,76 @@ class RecoveryDraftStore(private val directory: File) {
                 }.onSuccess { drafts.add(it) }
                     .onFailure { unreadable.add(file.name) }
             }
+        val hidden = runCatching { readHiddenRecentIds() }
+            .onFailure { unreadable.add(HIDDEN_RECENT_INDEX) }
+            .getOrDefault(emptySet())
         return RecoveryListing(
             drafts.sortedByDescending { it.updatedAtMs },
-            unreadable.sorted()
+            unreadable.sorted(),
+            hidden
         )
+    }
+
+    /**
+     * Remove only a Home shortcut. This operation never writes a recovery
+     * record or calls any Android file writer. The record stays openable and
+     * is still available in recovery even after an app restart.
+     */
+    @Synchronized
+    fun hideFromRecent(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = runCatching {
+        val record = readDraftFile(id) ?: error("Saved-file shortcut is missing")
+        check(record.trashedAtMs == null && record.savedToDisk) {
+            "Only clean saved-file shortcuts can be removed from Recent"
+        }
+        check(record.revision == expectedRevision) {
+            "The file record changed. Refresh Home and try again."
+        }
+        val hidden = readHiddenRecentIds()
+        if (id !in hidden) writeHiddenRecentIds(hidden + id)
+    }
+
+    /**
+     * Explicitly reopening the same file may show it in Recent again.
+     * Failure to update this shortcut index cannot damage any recovery text.
+     */
+    @Synchronized
+    fun showInRecent(id: DocumentIdentity): Result<Unit> = runCatching {
+        val hidden = readHiddenRecentIds()
+        if (id in hidden) writeHiddenRecentIds(hidden - id)
+    }
+
+    private fun readHiddenRecentIds(): Set<DocumentIdentity> {
+        val index = File(directory, HIDDEN_RECENT_INDEX)
+        if (!index.exists()) return emptySet()
+        require(index.isFile && index.length() <= MAX_HIDDEN_RECENT_BYTES) {
+            "Recent shortcut index is invalid; original file records were retained"
+        }
+        val content = index.readText(Charsets.UTF_8)
+        require(content.startsWith(HIDDEN_RECENT_HEADER)) {
+            "Recent shortcut index has an invalid header"
+        }
+        val payload = content.removePrefix(HIDDEN_RECENT_HEADER)
+        if (payload.isEmpty()) return emptySet()
+        require(payload.endsWith("\n")) { "Recent shortcut index is incomplete" }
+        val rawIds = payload.dropLast(1).split("\n")
+        require(rawIds.none { it.isEmpty() }) { "Recent shortcut index has an empty ID" }
+        val ids = rawIds.map(DocumentIdentity::fromStored)
+        require(ids.size == ids.toSet().size) { "Recent shortcut index has duplicate IDs" }
+        return ids.toSet()
+    }
+
+    private fun writeHiddenRecentIds(hidden: Set<DocumentIdentity>) {
+        val text = HIDDEN_RECENT_HEADER +
+            hidden.map { it.value }.sorted().joinToString(separator = "\n", postfix =
+                if (hidden.isEmpty()) "" else "\n")
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        require(bytes.size <= MAX_HIDDEN_RECENT_BYTES) {
+            "Recent shortcut index is full; no records were changed"
+        }
+        atomicWrite(File(directory, HIDDEN_RECENT_INDEX), bytes)
     }
 
     /**

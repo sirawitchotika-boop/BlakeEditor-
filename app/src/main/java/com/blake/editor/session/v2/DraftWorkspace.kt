@@ -42,6 +42,9 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
             ) {
                 error("This file changed outside Blake. Recovery record retained; inspect the file and use Save As.")
             }
+            // A failure in optional Recent shortcut metadata must never block
+            // reopening the real file or discard its recovery record.
+            store.showInRecent(id)
             return@runCatching existing
         }
 
@@ -57,6 +60,7 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
             savedToDisk = encoding != null && sourceSha256 != null
         )
         store.save(draft).getOrThrow()
+        store.showInRecent(id)
         draft
     }
 
@@ -88,6 +92,12 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
             updatedAtMs = System.currentTimeMillis()
         )
     }
+
+    /** Hide the shortcut without touching the stored draft or the real file. */
+    fun removeFromRecent(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = store.hideFromRecent(id, expectedRevision)
 
     /** Metadata-only rename; the real file remains unchanged. */
     fun renameDraft(
