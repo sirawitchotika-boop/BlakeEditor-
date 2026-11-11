@@ -31,6 +31,8 @@ import com.blake.editor.editor.EditorController
 import com.blake.editor.editor.NativeDocumentSyncGuard
 import com.blake.editor.editor.NativeInputEditText
 import com.blake.editor.editor.NativeUndoHistory
+import com.blake.editor.editor.NativeCodeVisualPolicy
+import com.blake.editor.editor.v2.CodeSyntaxScanner
 import com.blake.editor.editor.EditorEvent
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
@@ -38,6 +40,8 @@ import com.blake.editor.ui.system.EdgeToEdgeController
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
@@ -77,6 +81,10 @@ class MainActivity : AppCompatActivity() {
     private val nativeUndo = NativeUndoHistory()
     private var applyingExternalText = false
     private var pendingOpenCheck: Job? = null
+    private var highlightJob: Job? = null
+    private var lastCodeLanguage: String? = null
+    private var lastCodeTheme: ThemeMode? = null
+    private var lastCodeAllowed: Boolean? = null
 
     private lateinit var btnNew: Button
     private lateinit var btnOpen: Button
@@ -135,8 +143,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        highlightJob?.cancel()
         super.onPause()
         viewModel.flushDraft()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::nativeEditor.isInitialized) {
+            // Recolor after backgrounding without waking up to do work
+            // while the app is not visible.
+            scheduleNativeHighlight(immediate = true)
+        }
+    }
+
+    override fun onDestroy() {
+        highlightJob?.cancel()
+        pendingOpenCheck?.cancel()
+        super.onDestroy()
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
@@ -231,6 +255,7 @@ class MainActivity : AppCompatActivity() {
                 val content = s?.toString().orEmpty()
                 nativeUndo.edited(content, SystemClock.uptimeMillis())
                 viewModel.onContentChanged(content)
+                scheduleNativeHighlight(content)
             }
         })
         nativeEditor.onCursorMoved = { line, col ->
@@ -240,15 +265,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadNativeDocument(state: MainUiState) {
+    private fun loadNativeDocument(state: MainUiState): Boolean {
         // StateFlow emits after every key/cursor move. NEVER call setText
         // for those echoes: it breaks Thai composing text and caret position.
-        if (!documentSync.shouldLoad(state.documentGeneration)) return
+        if (!documentSync.shouldLoad(state.documentGeneration)) return false
         // Old recovery snapshots may predate the byte limit. Never try to
         // construct a multi-megabyte native EditText layout on the UI thread.
         if (state.content.length > LargeTextOpenGate.MAX_EDIT_BYTES) {
             tvStatus.text = "Restored draft is too large for editing; no text was changed"
-            return
+            return false
         }
         applyingExternalText = true
         try {
@@ -262,6 +287,7 @@ class MainActivity : AppCompatActivity() {
         } finally {
             applyingExternalText = false
         }
+        return true
     }
 
     private fun applyUndoOrRedo(content: String?) {
@@ -275,6 +301,41 @@ class MainActivity : AppCompatActivity() {
             applyingExternalText = false
         }
         viewModel.onContentChanged(content)
+        scheduleNativeHighlight(content)
+    }
+
+    /**
+     * Token scanning happens off the UI thread after typing settles.
+     * Applying ForegroundColorSpan never calls setText, setSelection or
+     * edits the source bytes; composing text is left to the Android IME.
+     */
+    private fun scheduleNativeHighlight(
+        snapshot: String? = null, immediate: Boolean = false
+    ) {
+        highlightJob?.cancel()
+        val state = viewModel.uiState.value
+        val language = state.syntaxMode.name
+        val source = snapshot ?: nativeEditor.text?.toString().orEmpty()
+        if (state.isPreviewing) return
+        if (!NativeCodeVisualPolicy.shouldHighlight(language, source.length)) {
+            nativeEditor.clearCodeTokens()
+            return
+        }
+        highlightJob = lifecycleScope.launch {
+            if (!immediate) delay(NativeCodeVisualPolicy.HIGHLIGHT_IDLE_MILLIS)
+            val tokens = withContext(Dispatchers.Default) {
+                CodeSyntaxScanner.scan(source, language)
+            }
+            if (!isActive) return@launch
+            val current = viewModel.uiState.value
+            if (current.syntaxMode.name == language && !current.isPreviewing &&
+                NativeCodeVisualPolicy.shouldHighlight(language,
+                    nativeEditor.text?.length ?: 0) &&
+                nativeEditor.text?.toString() == source
+            ) {
+                nativeEditor.applyCodeTokens(tokens)
+            }
+        }
     }
 
     private fun setupEditor() {
@@ -400,13 +461,34 @@ class MainActivity : AppCompatActivity() {
                     val modeText = if (state.isPreviewing) "Preview"
                         else state.syntaxMode.displayName + " · Native"
                     tvEditorInfo.text = "Ln ${state.cursorLine}, Col ${state.cursorColumn} | $modeText"
-                    loadNativeDocument(state)
+                    val loadedDocument = loadNativeDocument(state)
 
                     // Theme switching
                     if (state.themeMode != lastAppliedTheme) {
                         lastAppliedTheme = state.themeMode
                         applyThemePalette(state.themeMode)
                         editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                    }
+
+                    // Only configure the gutter when language, document,
+                    // size threshold or palette changes. Never reconfigure
+                    // EditText in response to cursor/selection emissions.
+                    val language = state.syntaxMode.name
+                    val codeAllowed = NativeCodeVisualPolicy.shouldDecorate(
+                        language, state.content.length
+                    )
+                    if (loadedDocument || lastCodeLanguage != language ||
+                        lastCodeTheme != state.themeMode ||
+                        lastCodeAllowed != codeAllowed
+                    ) {
+                        lastCodeLanguage = language
+                        lastCodeTheme = state.themeMode
+                        lastCodeAllowed = codeAllowed
+                        nativeEditor.configureCodeVisuals(
+                            codeAllowed,
+                            NativeCodeVisualPolicy.tokenPalette(state.themeMode)
+                        )
+                        scheduleNativeHighlight(immediate = true)
                     }
 
                     // The WebView never owns the live keyboard.
