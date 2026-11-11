@@ -23,11 +23,16 @@ class EditorController(
         .build()
 
     private val bridge = EditorBridge { event ->
-        if (event is EditorEvent.EditorReady) {
-            isReady = true
-            executePendingCommands()
+        // @JavascriptInterface callbacks arrive on WebView's private worker
+        // thread, not Android's main UI thread. Forward them in order to
+        // avoid racing StateFlow collectors and UI text synchronization.
+        webView.post {
+            if (event is EditorEvent.EditorReady) {
+                isReady = true
+                executePendingCommands()
+            }
+            onEvent(event)
         }
-        onEvent(event)
     }
 
     init {

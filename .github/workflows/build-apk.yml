@@ -47,6 +47,9 @@ jobs:
           fi
           chmod +x gradlew
 
+      - name: Check Web Editor input and caret regression
+        run: node app/src/test/js/editor-host-input-regression.test.cjs
+
       - name: Run Unit Tests & Build Debug APK
         run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
 
