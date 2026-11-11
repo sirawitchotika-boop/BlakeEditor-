@@ -350,7 +350,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         root.removeAllViews()
         PreviewSystemBars.update(this, root, BG)
         label("Trash", 22f, FG)
-        label("Nothing is deleted automatically. Restore comes in the next milestone.", 12f, MUTED)
+        label("Restore is available. Permanent deletion needs confirmation.", 12f, MUTED)
         controls(listOf(
             "Back to Home" to { showHome() },
             "Select to Delete" to { chooseTrashedForDeletion() },
@@ -389,6 +389,11 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         }
     }
 
+    /** Short, stable identifier distinguishes duplicate custom names before bulk actions. */
+    private fun draftChoiceLabel(draft: RecoveryDraft): String =
+        draft.displayName + " · " + draft.content.length + " chars · #" +
+            draft.id.value.takeLast(6)
+
     /**
      * Selection happens inside Android's multi-choice dialog. Nothing can move
      * from a scroll gesture; only the separately confirmed button changes data.
@@ -412,9 +417,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             val checked = BooleanArray(drafts.size)
             AlertDialog.Builder(this@V2WorkspacePreviewActivity)
                 .setTitle("Select drafts to move")
-                .setMultiChoiceItems(drafts.map {
-                    it.displayName + " · " + it.content.length + " characters"
-                }.toTypedArray(), checked) { _, index, isChecked ->
+                .setMultiChoiceItems(drafts.map { draftChoiceLabel(it) }.toTypedArray(), checked) { _, index, isChecked ->
                     checked[index] = isChecked
                 }
                 .setNegativeButton("Cancel", null)
@@ -432,7 +435,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
 
     private fun confirmSelectedToTrash(drafts: List<RecoveryDraft>) {
         if (busy || active != null || viewingTrash || drafts.isEmpty()) return
-        val preview = drafts.take(5).joinToString("\n") { "• " + it.displayName }
+        val preview = drafts.take(5).joinToString("\n") { "• " + draftChoiceLabel(it) }
         val more = if (drafts.size > 5) "\nAnd " + (drafts.size - 5) + " more" else ""
         AlertDialog.Builder(this)
             .setTitle("Move " + drafts.size + " drafts to Trash?")
@@ -515,9 +518,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             val checked = BooleanArray(drafts.size)
             AlertDialog.Builder(this@V2WorkspacePreviewActivity)
                 .setTitle("Select Trash entries to delete")
-                .setMultiChoiceItems(drafts.map {
-                    it.displayName + " · " + it.content.length + " characters"
-                }.toTypedArray(), checked) { _, index, isChecked ->
+                .setMultiChoiceItems(drafts.map { draftChoiceLabel(it) }.toTypedArray(), checked) { _, index, isChecked ->
                     checked[index] = isChecked
                 }
                 .setNegativeButton("Cancel", null)
@@ -559,7 +560,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
 
     private fun confirmPermanentDeletion(drafts: List<RecoveryDraft>) {
         if (busy || active != null || !viewingTrash || drafts.isEmpty()) return
-        val names = drafts.take(5).joinToString("\n") { "• " + it.displayName }
+        val names = drafts.take(5).joinToString("\n") { "• " + draftChoiceLabel(it) }
         val more = if (drafts.size > 5) "\nAnd " + (drafts.size - 5) + " more" else ""
         AlertDialog.Builder(this)
             .setTitle("Delete " + drafts.size + " permanently?")
