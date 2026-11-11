@@ -17,7 +17,7 @@ class BoundedEditableTextReaderTest {
         val thrown = runCatching {
             BoundedEditableTextReader.readUtf8(ByteArrayInputStream(bytes))
         }.exceptionOrNull()
-        assertTrue(thrown is IllegalArgumentException)
+        assertTrue(thrown is OversizedEditableFileException)
         assertTrue(thrown?.message?.contains("Large Text Reader") == true)
     }
 

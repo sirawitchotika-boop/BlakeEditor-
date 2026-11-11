@@ -158,6 +158,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun openDocumentSafely(uri: Uri, incomingIntent: Intent? = null) {
         pendingOpenCheck?.cancel()
+        tvStatus.text = "Checking file size (safe open)..."
         pendingOpenCheck = lifecycleScope.launch {
             val check = withContext(Dispatchers.IO) {
                 runCatching {
@@ -174,26 +175,7 @@ class MainActivity : AppCompatActivity() {
                 when (decision) {
                     LargeTextOpenGate.Decision.EDIT -> viewModel.openDocument(uri)
                     LargeTextOpenGate.Decision.READ_ONLY_PAGES ->
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("Large file — read only")
-                            .setMessage("This file is larger than 2 MB. " +
-                                "Open it in the paged reader with Previous and Next? " +
-                                "Your original file will not be changed.")
-                            .setNegativeButton("Cancel", null)
-                            .setPositiveButton("Open Reader") { _, _ ->
-                                val reader = Intent(this@MainActivity,
-                                    LargeTextReaderActivity::class.java).apply {
-                                    data = uri
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    // Preserve the external provider's temporary
-                                    // access when passing the URI to the viewer.
-                                    clipData = ClipData.newUri(
-                                        contentResolver, "Large text document", uri
-                                    )
-                                }
-                                startActivity(reader)
-                            }
-                            .show()
+                        showLargeFileDialog(uri)
                 }
             }.onFailure {
                 AlertDialog.Builder(this@MainActivity)
@@ -203,6 +185,27 @@ class MainActivity : AppCompatActivity() {
                     .show()
             }
         }
+    }
+
+    private fun showLargeFileDialog(uri: Uri) {
+        AlertDialog.Builder(this)
+            .setTitle("Large file — read only")
+            .setMessage("This file is larger than 2 MB. Read it in small pages " +
+                "using Previous and Next? The original file will not be changed.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Open Reader") { _, _ ->
+                val reader = Intent(this, LargeTextReaderActivity::class.java).apply {
+                    data = uri
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    if (uri.scheme == "content") {
+                        clipData = ClipData.newUri(
+                            contentResolver, "Large text document", uri
+                        )
+                    }
+                }
+                startActivity(reader)
+            }
+            .show()
     }
 
     /**
@@ -241,6 +244,12 @@ class MainActivity : AppCompatActivity() {
         // StateFlow emits after every key/cursor move. NEVER call setText
         // for those echoes: it breaks Thai composing text and caret position.
         if (!documentSync.shouldLoad(state.documentGeneration)) return
+        // Old recovery snapshots may predate the byte limit. Never try to
+        // construct a multi-megabyte native EditText layout on the UI thread.
+        if (state.content.length > LargeTextOpenGate.MAX_EDIT_BYTES) {
+            tvStatus.text = "Restored draft is too large for editing; no text was changed"
+            return
+        }
         applyingExternalText = true
         try {
             nativeEditor.setText(state.content)
@@ -383,6 +392,10 @@ class MainActivity : AppCompatActivity() {
                     val dirtyIndicator = if (state.isDirty) "*" else ""
                     tvFileName.text = "${state.fileName}$dirtyIndicator"
                     tvStatus.text = state.statusMessage
+                    state.pendingLargeReaderUri?.let { oversized ->
+                        viewModel.consumeLargeFileRequest()
+                        showLargeFileDialog(oversized)
+                    }
 
                     val modeText = if (state.isPreviewing) "Preview"
                         else state.syntaxMode.displayName + " · Native"
