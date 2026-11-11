@@ -38,6 +38,7 @@ import com.blake.editor.editor.v2.CodeSyntaxScanner
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
 import com.blake.editor.ui.system.EdgeToEdgeController
+import com.blake.editor.ui.preview.V2WorkspacePreviewActivity
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -90,6 +91,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnRedo: Button
     private lateinit var btnTheme: Button
     private lateinit var btnPreview: Button
+    private lateinit var btnOpenV2: Button
 
     private var lastAppliedTheme: ThemeMode? = null
     private var lastSyntaxMode: SyntaxMode? = null
@@ -117,6 +119,7 @@ class MainActivity : AppCompatActivity() {
         btnRedo = findViewById(R.id.btnRedo)
         btnTheme = findViewById(R.id.btnTheme)
         btnPreview = findViewById(R.id.btnPreview)
+        btnOpenV2 = findViewById(R.id.btnOpenV2)
 
         EdgeToEdgeController.setupWindowInsets(rootContainer)
         setupNativeEditor()
@@ -384,6 +387,38 @@ class MainActivity : AppCompatActivity() {
         btnPreview.setOnClickListener {
             viewModel.togglePreview()
         }
+
+        btnOpenV2.setOnClickListener {
+            val current = viewModel.uiState.value
+            when (V2EntryPolicy.decide(current.isDirty, current.isLoading)) {
+                V2EntryDecision.BLOCK_BUSY -> {
+                    tvStatus.text = getString(R.string.v2_entry_busy)
+                }
+                V2EntryDecision.CONFIRM_UNSAVED -> {
+                    AlertDialog.Builder(this)
+                        .setTitle(R.string.v2_entry_unsaved_title)
+                        .setMessage(R.string.v2_entry_unsaved_message)
+                        .setNegativeButton(R.string.v2_entry_stay, null)
+                        .setPositiveButton(R.string.v2_entry_open) { _, _ ->
+                            // A file operation may have started while the
+                            // confirmation was visible. Recheck before leaving.
+                            if (viewModel.uiState.value.isLoading) {
+                                tvStatus.text = getString(R.string.v2_entry_busy)
+                            } else {
+                                openBlakeV2()
+                            }
+                        }
+                        .show()
+                }
+                V2EntryDecision.OPEN -> openBlakeV2()
+            }
+        }
+    }
+
+    private fun openBlakeV2() {
+        // The Original Activity remains alive. onPause() flushes its draft.
+        // Never reuse the V1 editor's file URI or pass unsaved text to V2.
+        startActivity(Intent(this, V2WorkspacePreviewActivity::class.java))
     }
 
     private fun showThemeSelectionDialog() {
@@ -509,7 +544,7 @@ class MainActivity : AppCompatActivity() {
         tvEditorInfo.setTextColor(palette.secondaryTextColor)
         tvStatus.setTextColor(palette.secondaryTextColor)
 
-        val buttons = listOf(btnNew, btnOpen, btnSave, btnSaveAs, btnUndo, btnRedo, btnTheme, btnPreview)
+        val buttons = listOf(btnNew, btnOpen, btnSave, btnSaveAs, btnUndo, btnRedo, btnTheme, btnPreview, btnOpenV2)
         for (btn in buttons) {
             btn.setBackgroundColor(palette.buttonBackgroundColor)
             btn.setTextColor(palette.buttonTextColor)

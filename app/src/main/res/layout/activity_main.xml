@@ -210,6 +210,25 @@
         android:textSize="11sp"
         android:text="@string/welcome_placeholder" />
 
+    <!-- Explicit opt-in. Original keeps the launcher and its own draft. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="end"
+        android:paddingEnd="8dp"
+        android:background="#1E1E1E">
+
+        <Button
+            android:id="@+id/btnOpenV2"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:minHeight="40dp"
+            android:text="@string/action_open_v2"
+            android:textSize="12sp"
+            android:contentDescription="@string/action_open_v2" />
+    </LinearLayout>
+
     <!-- Ace Editor & Markdown Preview WebView Container -->
     <WebView
         android:id="@+id/webViewEditor"

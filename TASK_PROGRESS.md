@@ -1,3 +1,16 @@
+## Current milestone — opt-in V2 navigation from Original (2026-11-11)
+
+- **Verified baseline:** PR #23 merged to `main` at `309134c44834112b4d2b731c475dddad676f4049`. User confirmed physical phone tests 1–5 PASS and GitHub Actions run #43022329708 SUCCESS on the tested isolated APK.
+- **Working branch:** `feat/blake-v2-opt-in-entry-2026-11-11`, based on the exact main SHA above.
+- Keep `MainActivity` as the only production launcher and `ExternalFileRouterActivity` as the external text/file receiver. Add a clearly labeled **Open Blake 2.0 (Beta)** button in Original, with a pure navigation safety gate: active file operations BLOCK; dirty Original documents require an explicit warning; switching never calls discard.
+- Register V2 workspace and V2's separate read-only large-text reader as **non-exported internal Activities** in the main manifest, with no intent filters. Keep the separate debug launcher icon by changing its declaration to a debug-only `activity-alias`. Original still opens by default, including Android Files external Open with.
+- CI checks both debug and release APKs, confirms Original is the sole release launcher, V2 is only internal/non-exported, no debug Input Lab or alias appears in release, and Markdown Reader assets remain packaged.
+- Existing V1/V2 file writing, drafts, encoding, URI routing, size limits and shared app ID are not changed. Isolated test APK uses unique per-run package ID so no uninstall or data wipe is needed.
+- **Check status at commit creation:** tests, APKs and phone results NOT YET RUN on this new branch; verify CI before asking Boss to phone-test it.
+- **Next action:** draft PR, CI debug/release/isolated build, then 5 phone checks; no merge without explicit Boss approval.
+
+---
+
 ## Latest checkpoint — V2 workspace source-set staging (2026-11-11)
 
 - **Baseline:** PR #22 merged into `main` at `0fd2b057eaf98e8376a9dcced7afbebca2c58534`, after 5/5 user-reported phone checks on the isolated APK and passing GitHub Actions run #43018419501.

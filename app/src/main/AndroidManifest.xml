@@ -97,6 +97,21 @@
             android:exported="false"
             android:theme="@style/Theme.BlakeEditor"
             android:label="Large Text Reader" />
+
+        <!-- Internal opt-in V2 workspace. No MAIN/LAUNCHER or file intent
+             filters: Original remains the default and external file handler. -->
+        <activity
+            android:name=".ui.preview.V2WorkspacePreviewActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BlakePreview"
+            android:label="Blake 2.0 Beta" />
+
+        <!-- V2's own bounded reader, only launched from inside V2. -->
+        <activity
+            android:name=".ui.preview.LargeTextReaderActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BlakePreview"
+            android:label="Large Text Reader" />
     </application>
 
 </manifest>
