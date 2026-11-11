@@ -1,34 +1,37 @@
-# Blake Editor 2.0 — UI polish & camera cutout (2026-11-11)
+# Blake Editor 2.0 — icon and power-aware lifecycle milestone
 
-## Prior verified work
-- PR #1–#10 merged with user-reported passing phone tests: native Thai
-  input, independent drafts, Save/Save As, Markdown, large-file paging,
-  code-editing and crash fix, Find/Replace and quick-symbol toolbar.
-- PR #10 user confirmed all five phone checks passed.
-- The production V2 launch remains pending; debug Preview is still separate.
+## Confirmed baseline
+- PRs #1–#11 are merged on main.
+- User reported **all phone tests passed** for PR #11, including camera/status
+  area and large-reader paging, in the chat on 2026-11-11.
+- PR #10 Search/Replace, code toolbar and prior Save/draft fixes passed.
+- Blake 2.0 Preview remains a debug-only separate launcher, not a V2 release.
 
-## Current branch
-feature/blake-v2-ui-polish-camera-cutout-2026-11-11
-Base main 3a5c36d9c1ec4b5feadca6547bb7655432008f2a
+## Working branch
+feature/blake-v2-icon-lifecycle-power-2026-11-11
+Base: main a42b2f57c7ab07e361ceafb8d4edfcd25e13f4a8
 
-## Work
-- [x] Compared Realme camera/status-area fix in AuraCalc PR #5.
-- [x] Identified V2 debug activities missing native bar/cutout handling;
-      old V1 already had an EdgeToEdgeController.
-- [x] Added debug startup theme and runtime status/nav icon contrast.
-- [x] Added background drawn under edge-to-edge status/camera area.
-- [x] Added camera, status, navigation and keyboard insets with pure tests.
-- [x] Updated Home/Editor controls for touch size and palette consistency.
-- [x] Applied safe area and theme colors to Large Text Reader and Input Lab.
-- [ ] GitHub Actions test + APK build pending.
-- [ ] Physical phone test pending: cold start, AMOLED/Light/Eye Care, camera
-      strip, typing with keyboard, large-reader paging and old app launcher.
+## Implementation
+- [x] Selected exact open-book/code icon design from user's attached artwork.
+- [x] Adaptive launcher icon, optimized WebP source and monochrome vector.
+- [x] Pure snapshot restore policy with 32KiB saved-state cap and tests.
+- [x] More relaxed cursor autosave, skip persisted revisions, less text copying.
+- [x] Pause background highlighting and WebView; flush once onStop (no wakelock).
+- [x] Pure power policy tests.
+- [ ] Verify CI testDebugUnitTest assembleDebug on draft PR.
+- [ ] Physical phone lifecycle/energy, icon mask and recovery tests.
+- [ ] Upgrade icon art to full 432px adaptive resolution for final release if
+      necessary; test actual battery impact and background OEM behavior.
+- [ ] Production V2 release readiness, migration and launcher still pending.
 
-## Safety and release
-All source modifications are in the debug-only Preview activities/resources,
-plus focused debug unit tests. No changes to file writing/recovery/V1 main
-Activity. No merge, production promotion or release without explicit approval.
+## Limits
+Android can terminate a background process. This implementation improves
+recovery; it cannot prevent OS process kills and does not create a persistent
+foreground service or ongoing background task. Large unsaved edits may still
+lose the newest seconds if Android kills the process before an async onStop
+flush completes. The original Save/Save As behavior and recovery format are
+unchanged. No production release or merge is requested.
 
 ## Next action
-Verify PR GitHub Actions. Once debug APK succeeds, repeat five phone checks
-in docs/BLAKE_EDITOR_V2_UI_CAMERA_CUTOUT.md and collect screenshot feedback.
+Open draft PR, verify CI, then phone-test icon, folding/split-screen,
+background return, Thai/emoji drafts, Save and large-reader navigation.
