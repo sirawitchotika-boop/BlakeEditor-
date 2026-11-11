@@ -224,7 +224,9 @@ class RecoveryDraftStore(private val directory: File) {
                 value.toLongOrNull() ?: error("Untitled counter is out of range")
             } else {
                 val listing = list()
-                check(listing.unreadableFiles.isEmpty()) {
+                // The optional Recent shortcut index is not a recovery record.
+                // A damaged index must not prevent safe Untitled numbering.
+                check(listing.unreadableFiles.none { it != HIDDEN_RECENT_INDEX }) {
                     "Cannot initialize Untitled numbering while recovery records are unreadable"
                 }
                 val highest = listing.drafts.mapNotNull { draft ->
