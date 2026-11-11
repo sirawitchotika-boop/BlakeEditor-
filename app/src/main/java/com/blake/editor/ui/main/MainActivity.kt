@@ -19,6 +19,7 @@ import com.blake.editor.R
 import com.blake.editor.core.model.ThemeMode
 import com.blake.editor.editor.EditorCommand
 import com.blake.editor.editor.EditorController
+import com.blake.editor.editor.EditorContentSyncGuard
 import com.blake.editor.editor.EditorEvent
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
@@ -67,7 +68,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTheme: Button
     private lateinit var btnPreview: Button
 
-    private var lastLoadedContent = ""
+    private val contentSync = EditorContentSyncGuard()
     private var lastAppliedTheme: ThemeMode? = null
     private var lastPreviewState: Boolean? = null
 
@@ -134,13 +135,12 @@ class MainActivity : AppCompatActivity() {
         editorController = EditorController(webViewEditor) { event ->
             when (event) {
                 is EditorEvent.EditorReady -> {
-                    lastLoadedContent = viewModel.uiState.value.content
-                    editorController.execute(
-                        EditorCommand.SetContent(
-                            viewModel.uiState.value.content,
-                            viewModel.uiState.value.syntaxMode
+                    val state = viewModel.uiState.value
+                    if (contentSync.shouldApplyNativeContent(state.content)) {
+                        editorController.execute(
+                            EditorCommand.SetContent(state.content, state.syntaxMode)
                         )
-                    )
+                    }
                     editorController.execute(
                         EditorCommand.SetTheme(viewModel.uiState.value.themeMode)
                     )
@@ -151,7 +151,9 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 is EditorEvent.ContentChanged -> {
-                    lastLoadedContent = event.text
+                    // The text already lives in Ace; never echo its own edits
+                    // into SetContent because that resets caret, undo and IME.
+                    contentSync.onWebEditorChanged(event.text)
                     viewModel.onContentChanged(event.text)
                 }
                 is EditorEvent.CursorPositionChanged -> {
@@ -171,14 +173,12 @@ class MainActivity : AppCompatActivity() {
         btnNew.setOnClickListener {
             if (viewModel.uiState.value.isDirty) {
                 showUnsavedChangesDialog {
+                    // Let the new ViewModel state drive exactly one reset.
                     viewModel.newDocument()
-                    lastLoadedContent = ""
-                    editorController.execute(EditorCommand.SetContent("", viewModel.uiState.value.syntaxMode))
                 }
             } else {
+                // The new ViewModel state drives the reset once.
                 viewModel.newDocument()
-                lastLoadedContent = ""
-                editorController.execute(EditorCommand.SetContent("", viewModel.uiState.value.syntaxMode))
             }
         }
 
@@ -302,8 +302,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     // Content sync
-                    if (state.content != lastLoadedContent) {
-                        lastLoadedContent = state.content
+                    if (contentSync.shouldApplyNativeContent(state.content)) {
                         editorController.execute(EditorCommand.SetContent(state.content, state.syntaxMode))
                         if (state.isPreviewing) {
                             editorController.execute(EditorCommand.ShowPreview(state.content))

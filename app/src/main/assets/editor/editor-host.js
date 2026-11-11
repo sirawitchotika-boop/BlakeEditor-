@@ -43,13 +43,23 @@
 
     window.EditorHost = {
         setContent: function (text, mode) {
-            isInternalChange = true;
-            editor.setValue(text || "", -1);
+            const next = text == null ? "" : String(text);
+            // Native StateFlow may report the same text after a key press,
+            // cursor move, or Thai IME composition event. Resetting Ace here
+            // makes the caret jump and can duplicate or trap text. Keep the
+            // existing selection, composing input, and undo history intact.
+            if (editor.getValue() !== next) {
+                isInternalChange = true;
+                try {
+                    editor.setValue(next, -1);
+                    editor.session.getUndoManager().reset();
+                } finally {
+                    isInternalChange = false;
+                }
+            }
             if (mode) {
                 editor.session.setMode("ace/mode/" + mode);
             }
-            editor.session.getUndoManager().reset();
-            isInternalChange = false;
         },
 
         setMode: function (mode) {
