@@ -145,6 +145,55 @@ class RecoveryDraftStoreTest {
         assertEquals(original.savedToDisk, renamed.savedToDisk)
     }
 
+    @Test fun movingDraftToTrashKeepsTheFullRecoveryRecordAfterRestart() {
+        val source = "content://provider/docs/notes.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(source), sourceUri = source,
+            displayName = "notes.txt", language = "PLAIN_TEXT",
+            content = "Unsaved text 🌏\nAnother line",
+            selectionStart = 2, selectionEnd = 9, scrollY = 117,
+            revision = 6, sourceEncoding = "UTF8", sourceHadBom = true,
+            sourceSha256 = "b".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, original.revision).getOrThrow()
+        assertEquals(original.id, trashed.id)
+        assertEquals(original, trashed.copy(
+            trashedAtMs = null,
+            revision = original.revision,
+            updatedAtMs = original.updatedAtMs
+        ))
+        assertTrue(trashed.trashedAtMs != null)
+        val restarted = RecoveryDraftStore(File(dir, "v2"))
+        assertEquals(trashed, restarted.load(original.id).getOrThrow())
+        assertEquals(listOf(trashed), restarted.list().drafts)
+    }
+
+    @Test fun failedAndStaleTrashMovesDoNotHideOrRemoveTheDraft() {
+        val original = draft(DocumentIdentity.newUntitled(), "newer text", 4)
+        store.save(original).getOrThrow()
+        assertTrue(store.moveToTrash(original.id, 3).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        assertTrue(store.moveToTrash(DocumentIdentity.newUntitled(), 1).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        val moved = store.moveToTrash(original.id, 4).getOrThrow()
+        assertTrue(store.moveToTrash(original.id, moved.revision).isFailure)
+        assertEquals(moved, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun savedFileCannotBeMovedIntoUnfinishedDraftTrash() {
+        val source = "content://provider/docs/saved.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(source), sourceUri = source,
+            displayName = "saved.txt", language = "PLAIN_TEXT",
+            content = "saved", sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = true
+        )
+        store.save(saved).getOrThrow()
+        assertTrue(store.moveToTrash(saved.id, saved.revision).isFailure)
+        assertEquals(saved, store.load(saved.id).getOrThrow())
+    }
+
     @Test fun sameExistingFileGetsSameIdentity() {
         val uri = "content://com.android.externalstorage.documents/document/primary%3ANotes%2Fhello.txt"
         val id = DocumentIdentity.forUri(uri)

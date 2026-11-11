@@ -63,6 +63,24 @@ class DraftWorkspaceTest {
         assertEquals("Untitled 2", workspace.createUntitled().getOrThrow().displayName)
     }
 
+    @Test fun trashedLinkedDraftIsNotSilentlyReopenedOrSwitchedTo() {
+        val source = "content://provider/docs/private.txt"
+        val linked = workspace.openFromFile(
+            source, "private.txt", "PLAIN_TEXT", "original", "UTF8", false,
+            "a".repeat(64)
+        ).getOrThrow()
+        val changed = workspace.edit(linked, "unsaved changes", 6, 9, 33)
+        workspace.persist(changed).getOrThrow()
+        val moved = workspace.moveToTrash(linked.id, changed.revision).getOrThrow()
+        assertEquals("unsaved changes", moved.content)
+        assertTrue(workspace.openFromFile(source, "private.txt", "PLAIN_TEXT",
+            "new external content", "UTF8", false, "b".repeat(64)).isFailure)
+        val other = workspace.createUntitled().getOrThrow()
+        assertTrue(workspace.switchTo(other, linked.id).isFailure)
+        assertEquals(moved, workspace.load(linked.id).getOrThrow())
+        assertEquals(moved, V2HomeSections.from(workspace.list()).trash.single())
+    }
+
     @Test fun switchingPersistsOutgoingTextAndCursorBeforeLoading() {
         val first = workspace.createUntitled().getOrThrow()
         val second = workspace.createUntitled().getOrThrow()

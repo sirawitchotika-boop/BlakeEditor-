@@ -34,6 +34,9 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
         val id = DocumentIdentity.forUri(sourceUri)
         val existing = store.load(id).getOrThrow()
         if (existing != null) {
+            check(existing.trashedAtMs == null) {
+                "This file has an unfinished recovery draft in Trash. Its data was kept; restore it before editing."
+            }
             if (existing.savedToDisk && existing.sourceSha256 != null &&
                 sourceSha256 != null && existing.sourceSha256 != sourceSha256
             ) {
@@ -93,6 +96,10 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
         enteredName: String
     ): Result<RecoveryDraft> = store.renameDisplayName(id, expectedRevision, enteredName)
 
+    /** Hide an already-persisted unfinished draft only after atomic Trash storage. */
+    fun moveToTrash(id: DocumentIdentity, expectedRevision: Long): Result<RecoveryDraft> =
+        store.moveToTrash(id, expectedRevision)
+
     fun persist(current: RecoveryDraft): Result<Unit> = store.save(current)
 
     /** The caller must not leave the editor when this returns a failure. */
@@ -102,8 +109,10 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
     fun switchTo(current: RecoveryDraft, targetId: DocumentIdentity): Result<RecoveryDraft> =
         runCatching {
             store.save(current).getOrThrow()
-            store.load(targetId).getOrThrow()
+            val target = store.load(targetId).getOrThrow()
                 ?: error("The selected recovery draft is missing")
+            check(target.trashedAtMs == null) { "That draft is in Trash" }
+            target
         }
 
     fun load(id: DocumentIdentity): Result<RecoveryDraft?> = store.load(id)

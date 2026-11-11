@@ -203,6 +203,36 @@ class RecoveryDraftStore(private val directory: File) {
     }
 
     /**
+     * Atomically mark an unsaved draft as Trash without removing its recovery
+     * file. The full content, cursor, scroll, source URI and encoding metadata
+     * stay together in one complete snapshot.
+     *
+     * Home actions pass the revision that was displayed. A newer edit or
+     * another operation must win rather than being silently hidden.
+     */
+    @Synchronized
+    fun moveToTrash(id: DocumentIdentity, expectedRevision: Long): Result<RecoveryDraft> =
+        runCatching {
+            val current = readDraftFile(id) ?: error("Draft is missing; nothing was moved")
+            check(current.revision == expectedRevision) {
+                "Draft changed since Home opened. Reload Home before moving it."
+            }
+            check(current.trashedAtMs == null) { "Draft is already in Trash" }
+            check(!current.savedToDisk) {
+                "Saved files belong in Recent Files, not draft Trash"
+            }
+            check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
+            val now = System.currentTimeMillis().coerceAtLeast(0L)
+            val moved = current.copy(
+                trashedAtMs = now,
+                revision = current.revision + 1L,
+                updatedAtMs = maxOf(current.updatedAtMs, now)
+            )
+            save(moved).getOrThrow()
+            moved
+        }
+
+    /**
      * Only delete when the on-disk revision equals the revision that was
      * successfully written to the real file. Never clear newer unsaved edits.
      */

@@ -31,6 +31,7 @@ class V2HomeSectionsTest {
         val sections = V2HomeSections.from(RecoveryListing(emptyList(), emptyList()))
         assertTrue(sections.continueWriting.isEmpty())
         assertTrue(sections.recentlySaved.isEmpty())
+        assertTrue(sections.trash.isEmpty())
     }
 
     @Test fun groupsRecoveryAndSavedFilesWithoutChangingTheirRelativeOrder() {
@@ -52,6 +53,7 @@ class V2HomeSectionsTest {
         val sections = V2HomeSections.from(listing)
         assertEquals(listOf(active), sections.continueWriting)
         assertTrue(sections.recentlySaved.isEmpty())
+        assertEquals(listOf(trashed, savedTrashed), sections.trash)
         assertEquals(3, listing.drafts.size)
     }
 
