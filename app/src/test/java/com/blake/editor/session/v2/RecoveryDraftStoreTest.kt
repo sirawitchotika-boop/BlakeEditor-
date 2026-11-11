@@ -71,6 +71,80 @@ class RecoveryDraftStoreTest {
         assertEquals("damaged", broken.readText())
     }
 
+    @Test fun renameKeepsEveryOtherFieldAndSurvivesReopen() {
+        val original = RecoveryDraft(
+            DocumentIdentity.newUntitled(), null, "Untitled 1", "MARKDOWN",
+            "Unsent text 🌏", selectionStart = 2, selectionEnd = 6, scrollY = 87,
+            revision = 5, updatedAtMs = 5
+        )
+        store.save(original).getOrThrow()
+        val renamed = store.renameDisplayName(original.id, 5, "  Writing ideas  ").getOrThrow()
+        assertEquals("Writing ideas", renamed.displayName)
+        assertEquals(6L, renamed.revision)
+        assertEquals(original, renamed.copy(
+            displayName = original.displayName,
+            revision = original.revision,
+            updatedAtMs = original.updatedAtMs
+        ))
+        assertEquals(renamed, RecoveryDraftStore(File(dir, "v2")).load(original.id).getOrThrow())
+    }
+
+    @Test fun renameRejectsInvalidAndStaleRequestsWithoutDiscardingBuffer() {
+        val original = draft(DocumentIdentity.newUntitled(), "private unsaved text", 2)
+        store.save(original).getOrThrow()
+        assertTrue(store.renameDisplayName(original.id, 2, "  ").isFailure)
+        assertTrue(store.renameDisplayName(original.id, 2, "a".repeat(9000)).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        val newer = original.copy(content = "newer buffer", revision = 3)
+        store.save(newer).getOrThrow()
+        assertTrue(store.renameDisplayName(original.id, 2, "Stale name").isFailure)
+        assertEquals(newer, store.load(original.id).getOrThrow())
+        assertTrue(store.renameDisplayName(DocumentIdentity.newUntitled(), 1, "Missing").isFailure)
+        assertEquals(newer, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun unchangedAndDuplicateCustomNamesDoNotChangeIdentity() {
+        val one = draft(DocumentIdentity.newUntitled(), "one")
+        val two = draft(DocumentIdentity.newUntitled(), "two")
+        store.save(one).getOrThrow()
+        store.save(two).getOrThrow()
+        val first = store.renameDisplayName(one.id, 1, "My Notes").getOrThrow()
+        val second = store.renameDisplayName(two.id, 1, "My Notes").getOrThrow()
+        assertNotEquals(first.id, second.id)
+        assertEquals("My Notes", first.displayName)
+        assertEquals("My Notes", second.displayName)
+        assertEquals(first, store.renameDisplayName(one.id, 2, " My Notes ").getOrThrow())
+    }
+
+    @Test fun renameCannotTouchDraftAlreadyMarkedTrashed() {
+        val trashed = draft(DocumentIdentity.newUntitled(), "safe")
+            .copy(trashedAtMs = 123L)
+        store.save(trashed).getOrThrow()
+        assertTrue(store.renameDisplayName(trashed.id, 1, "Hidden").isFailure)
+        assertEquals(trashed, store.load(trashed.id).getOrThrow())
+    }
+
+    @Test fun renamingLinkedUnsavedFileKeepsItsUriAndHash() {
+        val uri = "content://provider/docs/important.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "important.txt", language = "PLAIN_TEXT",
+            content = "Unsaved change", selectionStart = 4, selectionEnd = 7, scrollY = 13,
+            revision = 3, sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val renamed = store.renameDisplayName(original.id, 3, "Private idea").getOrThrow()
+        assertEquals(original.sourceUri, renamed.sourceUri)
+        assertEquals(original.id, renamed.id)
+        assertEquals(original.sourceSha256, renamed.sourceSha256)
+        assertEquals(original.content, renamed.content)
+        assertEquals(original.selectionStart, renamed.selectionStart)
+        assertEquals(original.selectionEnd, renamed.selectionEnd)
+        assertEquals(original.scrollY, renamed.scrollY)
+        assertEquals(original.savedToDisk, renamed.savedToDisk)
+    }
+
     @Test fun sameExistingFileGetsSameIdentity() {
         val uri = "content://com.android.externalstorage.documents/document/primary%3ANotes%2Fhello.txt"
         val id = DocumentIdentity.forUri(uri)

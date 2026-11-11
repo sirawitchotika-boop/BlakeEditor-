@@ -86,6 +86,13 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
         )
     }
 
+    /** Metadata-only rename; the real file remains unchanged. */
+    fun renameDraft(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        enteredName: String
+    ): Result<RecoveryDraft> = store.renameDisplayName(id, expectedRevision, enteredName)
+
     fun persist(current: RecoveryDraft): Result<Unit> = store.save(current)
 
     /** The caller must not leave the editor when this returns a failure. */

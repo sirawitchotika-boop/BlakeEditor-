@@ -293,10 +293,22 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 val saved = sections.recentlySaved
                 if (unfinished.isNotEmpty()) list.addView(text("Continue Writing", 17f, FG))
                 unfinished.forEach { draft ->
-                    list.addView(button(draft.displayName + " · " + draft.language +
+                    val row = LinearLayout(this@V2WorkspacePreviewActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    row.addView(button(draft.displayName + " · " + draft.language +
                         "\nRecovery draft · " + draft.content.length + " characters") {
                         loadDraft(draft.id)
+                    }.apply {
+                        layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
                     })
+                    row.addView(button("Rename") { renameDraft(draft) }.apply {
+                        layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+                            marginStart = dp(6)
+                        }
+                    })
+                    list.addView(row)
                 }
                 if (saved.isNotEmpty()) list.addView(text("Recent Saved Files", 17f, FG))
                 saved.forEach { draft ->
@@ -307,6 +319,37 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun renameDraft(draft: RecoveryDraft) {
+        if (busy || active != null) return
+        val nameField = EditText(this).apply {
+            setSingleLine(true)
+            setText(draft.displayName)
+            selectAll()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rename Draft")
+            .setMessage("Changes the draft name only. It does not rename or save a real file.")
+            .setView(nameField)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Rename") { _, _ ->
+                if (busy || active != null) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        workspace.renameDraft(draft.id, draft.revision,
+                            nameField.text?.toString().orEmpty())
+                    }
+                    busy = false
+                    result.onSuccess { showHome() }
+                        .onFailure {
+                            dialog("Could not rename draft", it.message.orEmpty() +
+                                "\nYour existing draft was kept unchanged.")
+                        }
+                }
+            }
+            .show()
     }
 
     private fun newFile() {

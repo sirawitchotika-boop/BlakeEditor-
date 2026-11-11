@@ -53,6 +53,16 @@ class DraftWorkspaceTest {
         assertEquals("Untitled 2", reopenedWorkspace.load(second.id).getOrThrow()?.displayName)
     }
 
+    @Test fun renameThroughWorkspaceDoesNotConsumeTheNextUntitledNumber() {
+        val first = workspace.createUntitled().getOrThrow()
+        val edited = workspace.edit(first, "Draft text", 4, 4, 25)
+        workspace.persist(edited).getOrThrow()
+        val renamed = workspace.renameDraft(first.id, edited.revision, "Planning").getOrThrow()
+        assertEquals(first.id, renamed.id)
+        assertEquals("Draft text", workspace.load(renamed.id).getOrThrow()?.content)
+        assertEquals("Untitled 2", workspace.createUntitled().getOrThrow().displayName)
+    }
+
     @Test fun switchingPersistsOutgoingTextAndCursorBeforeLoading() {
         val first = workspace.createUntitled().getOrThrow()
         val second = workspace.createUntitled().getOrThrow()

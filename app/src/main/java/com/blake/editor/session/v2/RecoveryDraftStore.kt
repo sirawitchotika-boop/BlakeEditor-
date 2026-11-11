@@ -168,6 +168,41 @@ class RecoveryDraftStore(private val directory: File) {
     }
 
     /**
+     * Rename a draft's display label only. Never rename or write the backing
+     * Android file. Compare the Home row's revision with the latest stored
+     * snapshot so a stale rename cannot replace newer unsaved edits.
+     *
+     * This uses the same durable, atomic recovery write as text edits.
+     * Duplicate custom names are intentionally allowed; IDs are the identity.
+     */
+    @Synchronized
+    fun renameDisplayName(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        enteredName: String
+    ): Result<RecoveryDraft> = runCatching {
+        val name = enteredName.trim()
+        require(name.isNotEmpty()) { "Draft name cannot be empty" }
+        require(name.toByteArray(Charsets.UTF_8).size <= MAX_METADATA_BYTES) {
+            "Draft name is too long"
+        }
+        val current = readDraftFile(id) ?: error("Draft is missing; nothing was changed")
+        check(current.trashedAtMs == null) { "Draft is in Trash and cannot be renamed here" }
+        check(current.revision == expectedRevision) {
+            "Draft changed since Home opened. Reload Home and try again."
+        }
+        if (current.displayName == name) return@runCatching current
+        check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
+        val updated = current.copy(
+            displayName = name,
+            revision = current.revision + 1L,
+            updatedAtMs = maxOf(current.updatedAtMs, System.currentTimeMillis())
+        )
+        save(updated).getOrThrow()
+        updated
+    }
+
+    /**
      * Only delete when the on-disk revision equals the revision that was
      * successfully written to the real file. Never clear newer unsaved edits.
      */
