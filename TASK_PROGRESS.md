@@ -35,3 +35,12 @@
 Review [the V2 promotion gate](docs/BLAKE_EDITOR_V2_PROMOTION_GATE.md) and prepare a **separate, small draft PR based on current main** to make the V2 workspace reusable outside the debug source set **without changing the default launcher, external file routing or current file writer**. Review source-set dependencies and safe navigation first; add focused tests. Verify build and phone results before any wider rollout or launcher change.
 
 **Do not merge, publish, change the default launcher or replace stable Original without Boss's explicit approval.** Historical failure details remain in `docs/BLAKE_EDITOR_LARGE_EXTERNAL_OPEN.md` and prior PR timelines.
+
+## V2 shared Home/recovery boundary — implementation checkpoint (2026-11-11)
+
+- Branch: `feature/blake-v2-shared-home-policy-2026-11-11` (created from `main` at `de508a89673fa0ffb245f7601e06db5a2d9c2691`).
+- Move the existing Android recreation and quiet-autosave policies unchanged from the debug source set into the main source set. The preview keeps using the same packages/classes and current tests.
+- Extract read-only V2 Home draft grouping to `session.v2.V2HomeSections`; Preview Home now calls it for Continue Writing / Recent Saved Files. Add JVM tests for empty/grouped/unreadable cases.
+- **Original launcher, external file router, code input, real-file writer, recovery bytes, debug manifest and V2 UI layout remain unchanged.** No new app entry points or release changes.
+- GitHub Actions unit tests and debug build: **NOT RUN yet at this checkpoint**; real-phone tests **NOT RUN** for this branch.
+- Next action: open a draft PR, check CI, then test the new debug APK on Android before a merge decision.
