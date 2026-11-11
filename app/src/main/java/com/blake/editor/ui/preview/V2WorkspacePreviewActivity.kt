@@ -280,6 +280,12 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         // press Move, check a draft, or trigger any storage action.
         root.addView(button("Select drafts for Trash") { chooseDraftsForTrash() },
             LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        // Keep Trash navigation pinned ABOVE the ScrollView even when Recent
+        // Saved Files grows. It is never appended to the document list.
+        val trashNavigation = button("Trash · 0 stored drafts") { showTrash() }
+        root.addView(trashNavigation, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(8)
+        })
         status = label("Loading your documents...", 12f, MUTED)
         val scroll = ScrollView(this)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -292,6 +298,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             val saved = sections.recentlySaved
             status?.text = "Documents: " + (unfinished.size + saved.size) +
                 " · Trash: " + sections.trash.size + " · Stored locally"
+            trashNavigation.text = "Trash · " + sections.trash.size + " stored drafts"
             if (listing.unreadableFiles.isNotEmpty()) {
                 status?.append(" · " + listing.unreadableFiles.size + " unreadable, kept safely")
             }
@@ -321,7 +328,16 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                     bottomMargin = dp(8)
                 })
             }
-            if (saved.isNotEmpty()) list.addView(text("Recent Saved Files", 17f, FG))
+            if (saved.isNotEmpty()) {
+                list.addView(text("Recent Saved Files", 17f, FG))
+                list.addView(button("Select recent files to remove") {
+                    chooseRecentToRemove()
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                        bottomMargin = dp(8)
+                    }
+                })
+            }
             saved.forEach { draft ->
                 list.addView(button(draft.displayName + " · " + draft.language +
                     "\nSaved file · " + draft.content.length + " characters") {
@@ -332,18 +348,83 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                     }
                 })
             }
-            list.addView(button("Trash · " + sections.trash.size + " stored drafts") {
-                showTrash()
-            }.apply {
-                layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-                    topMargin = dp(8)
-                    bottomMargin = dp(8)
-                }
-            })
         }
     }
 
-    /** Trash is a read-only list until conflict-safe Restore is implemented. */
+    /** Pick saved-file shortcuts without removing a draft or changing file bytes. */
+    private fun chooseRecentToRemove() {
+        if (busy || active != null || viewingTrash) return
+        busy = true
+        lifecycleScope.launch {
+            val listing = withContext(Dispatchers.IO) { workspace.list() }
+            busy = false
+            if (viewingTrash || active != null) return@launch
+            if (listing.unreadableFiles.isNotEmpty()) {
+                dialog("Some recovery records are unreadable",
+                    "Those records were not deleted. Only readable shortcuts can be selected.")
+            }
+            val recent = V2HomeSections.from(listing).recentlySaved
+            if (recent.isEmpty()) {
+                dialog("Recent is empty", "There are no saved-file shortcuts to remove.")
+                return@launch
+            }
+            val checked = BooleanArray(recent.size)
+            AlertDialog.Builder(this@V2WorkspacePreviewActivity)
+                .setTitle("Select Recent shortcuts")
+                .setMultiChoiceItems(recent.map { draftChoiceLabel(it) }.toTypedArray(),
+                    checked) { _, index, isChecked ->
+                    checked[index] = isChecked
+                }
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Review selected") { _, _ ->
+                    val selected = recent.filterIndexed { index, _ -> checked[index] }
+                    if (selected.isEmpty()) {
+                        dialog("Nothing selected", "Choose one or more saved files first.")
+                    } else {
+                        confirmRemoveFromRecent(selected)
+                    }
+                }
+                .show()
+        }
+    }
+
+    private fun confirmRemoveFromRecent(recent: List<RecoveryDraft>) {
+        if (busy || active != null || viewingTrash || recent.isEmpty()) return
+        val preview = recent.take(5).joinToString("\n") { "• " + draftChoiceLabel(it) }
+        val extra = if (recent.size > 5) "\nAnd " + (recent.size - 5) + " more" else ""
+        AlertDialog.Builder(this)
+            .setTitle("Remove " + recent.size + " from Recent?")
+            .setMessage(preview + extra +
+                "\n\nOnly Home shortcuts will be hidden. No real files, recovery " +
+                "records, text or saved data will be deleted. Reopening a file " +
+                "through Open File can show it in Recent again.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove shortcuts") { _, _ ->
+                if (busy || active != null || viewingTrash) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    val outcome = withContext(Dispatchers.IO) {
+                        var hidden = 0
+                        val failed = mutableListOf<String>()
+                        recent.forEach { entry ->
+                            val result = workspace.removeFromRecent(entry.id, entry.revision)
+                            if (result.isSuccess) hidden++ else failed.add(entry.displayName)
+                        }
+                        Pair(hidden, failed)
+                    }
+                    busy = false
+                    showHome()
+                    if (outcome.second.isNotEmpty()) {
+                        dialog("Some shortcuts were kept",
+                            outcome.first.toString() + " removed, " +
+                                outcome.second.size + " still visible.\n" +
+                                outcome.second.take(4).joinToString(", "))
+                    }
+                }
+            }
+            .show()
+    }
+
     private fun showTrash() {
         if (busy || active != null) return
         viewingTrash = true
