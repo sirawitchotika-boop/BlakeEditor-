@@ -321,7 +321,7 @@ class RecoveryDraftStore(private val directory: File) {
         DataInputStream(ByteArrayInputStream(bytes)).use { input ->
             require(input.readInt() == MAGIC) { "Unrecognized draft format" }
             val version = input.readInt()
-            require(version == 1 || version == FORMAT_VERSION) { "Unsupported draft version" }
+            require(version in 1..FORMAT_VERSION) { "Unsupported draft version" }
             val id = DocumentIdentity.fromStored(input.readShortString())
             val uri = if (input.readBoolean()) input.readShortString() else null
             val name = input.readShortString()
