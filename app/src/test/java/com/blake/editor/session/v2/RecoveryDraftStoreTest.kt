@@ -3,6 +3,9 @@ package com.blake.editor.session.v2
 import java.io.File
 import java.nio.file.Files
 import java.util.Properties
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -22,6 +25,85 @@ class RecoveryDraftStoreTest {
 
     private fun draft(id: DocumentIdentity, text: String, version: Long = 1): RecoveryDraft =
         RecoveryDraft(id, null, "Untitled", "PLAIN_TEXT", text, revision = version)
+
+
+    private fun runTogether(first: () -> Unit, second: () -> Unit) {
+        val executor = Executors.newFixedThreadPool(2)
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        try {
+            val tasks = listOf(first, second).map { action ->
+                executor.submit {
+                    ready.countDown()
+                    check(start.await(5, TimeUnit.SECONDS))
+                    action()
+                }
+            }
+            assertTrue("Both writers should be ready", ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+            tasks.forEach { it.get(20, TimeUnit.SECONDS) }
+        } finally {
+            start.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun concurrentStoresNeverReplaceNewerRecoveryWithStaleText() {
+        val secondStore = RecoveryDraftStore(File(dir, "v2"))
+        repeat(20) { iteration ->
+            val id = DocumentIdentity.newUntitled()
+            store.save(draft(id, "baseline", 1)).getOrThrow()
+            var newerSaved = false
+            runTogether(
+                { store.save(draft(id, "older-$iteration", 2)) },
+                { newerSaved = secondStore.save(draft(id, "newer-$iteration", 3)).isSuccess }
+            )
+            assertTrue("Newer revision must save", newerSaved)
+            val persisted = store.load(id).getOrThrow()
+            assertEquals(3L, persisted?.revision)
+            assertEquals("newer-$iteration", persisted?.content)
+        }
+    }
+
+    @Test fun concurrentSavedRevisionCleanupCannotDeleteNewerRecovery() {
+        val secondStore = RecoveryDraftStore(File(dir, "v2"))
+        repeat(20) { iteration ->
+            val id = DocumentIdentity.newUntitled()
+            store.save(draft(id, "old", 1)).getOrThrow()
+            var newerSaved = false
+            runTogether(
+                { store.clearSavedRevision(id, 1).getOrThrow() },
+                { newerSaved = secondStore.save(draft(id, "unsaved-$iteration", 2)).isSuccess }
+            )
+            assertTrue("Newer recovery must save", newerSaved)
+            val persisted = store.load(id).getOrThrow()
+            assertEquals(2L, persisted?.revision)
+            assertEquals("unsaved-$iteration", persisted?.content)
+        }
+    }
+
+    @Test fun concurrentRecentHidesKeepBothShortcutIds() {
+        val secondStore = RecoveryDraftStore(File(dir, "v2"))
+        repeat(12) { iteration ->
+            val firstUri = "content://example/recent/first-$iteration.txt"
+            val secondUri = "content://example/recent/second-$iteration.txt"
+            val firstId = DocumentIdentity.forUri(firstUri)
+            val secondId = DocumentIdentity.forUri(secondUri)
+            store.save(RecoveryDraft(firstId, firstUri, "first.txt", "PLAIN_TEXT",
+                "one", sourceEncoding = "UTF8", sourceSha256 = "a".repeat(64),
+                savedToDisk = true)).getOrThrow()
+            store.save(RecoveryDraft(secondId, secondUri, "second.txt", "PLAIN_TEXT",
+                "two", sourceEncoding = "UTF8", sourceSha256 = "b".repeat(64),
+                savedToDisk = true)).getOrThrow()
+            runTogether(
+                { store.hideFromRecent(firstId, 1).getOrThrow() },
+                { secondStore.hideFromRecent(secondId, 1).getOrThrow() }
+            )
+            val hidden = store.list().hiddenRecentIds
+            assertTrue(hidden.contains(firstId))
+            assertTrue(hidden.contains(secondId))
+        }
+    }
 
     @Test fun twoUntitledDocumentsCannotOverwriteEachOther() {
         val one = DocumentIdentity.newUntitled()
