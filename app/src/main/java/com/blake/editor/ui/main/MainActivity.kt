@@ -23,21 +23,25 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.blake.editor.BlakeEditorApp
 import com.blake.editor.R
+import com.blake.editor.core.model.SyntaxMode
 import com.blake.editor.core.model.ThemeMode
 import com.blake.editor.editor.EditorCommand
 import com.blake.editor.file.LargeTextOpenGate
 import com.blake.editor.ui.large.LargeTextReaderActivity
 import com.blake.editor.editor.EditorController
+import com.blake.editor.editor.NativeCodePresentation
 import com.blake.editor.editor.NativeDocumentSyncGuard
 import com.blake.editor.editor.NativeInputEditText
 import com.blake.editor.editor.NativeUndoHistory
 import com.blake.editor.editor.EditorEvent
+import com.blake.editor.editor.v2.CodeSyntaxScanner
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
 import com.blake.editor.ui.system.EdgeToEdgeController
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
@@ -88,6 +92,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPreview: Button
 
     private var lastAppliedTheme: ThemeMode? = null
+    private var lastSyntaxMode: SyntaxMode? = null
+    private var lastHighlightedGeneration: Long? = null
+    private var highlightJob: Job? = null
     private var lastPreviewState: Boolean? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,8 +142,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        highlightJob?.cancel()
         super.onPause()
         viewModel.flushDraft()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::nativeEditor.isInitialized) {
+            scheduleSyntaxHighlight(viewModel.uiState.value.syntaxMode, immediate = true)
+        }
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
@@ -231,6 +246,7 @@ class MainActivity : AppCompatActivity() {
                 val content = s?.toString().orEmpty()
                 nativeUndo.edited(content, SystemClock.uptimeMillis())
                 viewModel.onContentChanged(content)
+                scheduleSyntaxHighlight(viewModel.uiState.value.syntaxMode)
             }
         })
         nativeEditor.onCursorMoved = { line, col ->
@@ -275,6 +291,33 @@ class MainActivity : AppCompatActivity() {
             applyingExternalText = false
         }
         viewModel.onContentChanged(content)
+    }
+
+    /**
+     * Scan off the UI thread. Render spans only on unchanged native input;
+     * never replace the document, selection, or active IME composition.
+     */
+    private fun scheduleSyntaxHighlight(mode: SyntaxMode, immediate: Boolean = false) {
+        highlightJob?.cancel()
+        if (!::nativeEditor.isInitialized ||
+            !NativeCodePresentation.shouldHighlight(mode, nativeEditor.length()) ||
+            viewModel.uiState.value.isPreviewing) {
+            if (::nativeEditor.isInitialized) nativeEditor.clearSyntaxTokens()
+            return
+        }
+        val snapshot = nativeEditor.text?.toString().orEmpty()
+        highlightJob = lifecycleScope.launch {
+            if (!immediate) delay(220L)
+            val tokens = withContext(Dispatchers.Default) {
+                CodeSyntaxScanner.scan(snapshot, mode.name)
+            }
+            val current = viewModel.uiState.value
+            if (!current.isPreviewing && current.syntaxMode == mode &&
+                nativeEditor.text?.toString() == snapshot) {
+                nativeEditor.applySyntaxTokens(tokens,
+                    NativeCodePresentation.colorsFor(current.themeMode))
+            }
+        }
     }
 
     private fun setupEditor() {
@@ -400,13 +443,27 @@ class MainActivity : AppCompatActivity() {
                     val modeText = if (state.isPreviewing) "Preview"
                         else state.syntaxMode.displayName + " · Native"
                     tvEditorInfo.text = "Ln ${state.cursorLine}, Col ${state.cursorColumn} | $modeText"
+                    val newDocument = lastHighlightedGeneration != state.documentGeneration
+                    if (newDocument) lastHighlightedGeneration = state.documentGeneration
                     loadNativeDocument(state)
 
-                    // Theme switching
-                    if (state.themeMode != lastAppliedTheme) {
+                    val themeChanged = state.themeMode != lastAppliedTheme
+                    val modeChanged = state.syntaxMode != lastSyntaxMode
+                    if (themeChanged) {
                         lastAppliedTheme = state.themeMode
                         applyThemePalette(state.themeMode)
                         editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                    }
+                    if (modeChanged || themeChanged) {
+                        lastSyntaxMode = state.syntaxMode
+                        val palette = ThemeController.getPalette(state.themeMode)
+                        nativeEditor.configureGutter(
+                            NativeCodePresentation.showLineNumbers(state.syntaxMode),
+                            palette.surfaceColor, palette.secondaryTextColor
+                        )
+                    }
+                    if (newDocument || modeChanged || themeChanged) {
+                        scheduleSyntaxHighlight(state.syntaxMode, immediate = true)
                     }
 
                     // The WebView never owns the live keyboard.
