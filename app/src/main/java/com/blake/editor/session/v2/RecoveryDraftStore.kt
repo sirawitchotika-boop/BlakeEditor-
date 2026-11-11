@@ -186,7 +186,7 @@ class RecoveryDraftStore(private val directory: File) {
         require(payload.endsWith("\n")) { "Recent shortcut index is incomplete" }
         val rawIds = payload.dropLast(1).split("\n")
         require(rawIds.none { it.isEmpty() }) { "Recent shortcut index has an empty ID" }
-        val ids = rawIds.map(DocumentIdentity::fromStored)
+        val ids = rawIds.map { DocumentIdentity.fromStored(it) }
         require(ids.size == ids.toSet().size) { "Recent shortcut index has duplicate IDs" }
         return ids.toSet()
     }
