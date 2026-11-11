@@ -25,9 +25,13 @@ object NativeCodePresentation {
 
     /** Reuses the accessible code-color families of Blake 2.0 Preview. */
     fun colorsFor(theme: ThemeMode): NativeTokenColors = when (theme) {
-        ThemeMode.DARK -> NativeTokenColors(
+        ThemeMode.FOLLOW_SYSTEM, ThemeMode.DARK -> NativeTokenColors(
             0xFFC4A7FF.toInt(), 0xFF8FE5BC.toInt(), 0xFFF8C776.toInt(),
             0xFF8298AC.toInt(), 0xFF89BEFF.toInt()
+        )
+        ThemeMode.LIGHT -> NativeTokenColors(
+            0xFF5B21B6.toInt(), 0xFF047857.toInt(), 0xFFB45309.toInt(),
+            0xFF64748B.toInt(), 0xFF0369A1.toInt()
         )
         ThemeMode.AMOLED -> NativeTokenColors(
             0xFFBAA7FF.toInt(), 0xFF6EE7B7.toInt(), 0xFFFCCB76.toInt(),

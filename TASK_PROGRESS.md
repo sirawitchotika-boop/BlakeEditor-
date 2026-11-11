@@ -1,3 +1,14 @@
+## PR #24 addition — Shared Original / V2 theme (2026-11-11)
+
+- Boss accepted PR #24 original phone tests 5/5, theme-strip fix and larger Beta button on prior APKs; then reported Dark in Original vs Eye Care in V2 after switching.
+- Root cause: Original uses DataStore `blake_settings/theme_mode` and had Dark/AMOLED/Eye Care; V2 stores theme separately in `blake_v2_preview_editor_settings` and has Follow System/Light as well.
+- Add `SharedEditorTheme` choice used by both. Original's explicit selection writes shared choice and keeps DataStore; V2's explicit selection writes shared choice and its previous preference. Original checks shared selection when resumed. On first Original→V2 entry when shared choice is empty, Original's current selection initializes it.
+- Add Light and Follow System in Original, with native syntax, WebView Markdown, status-bar contrast, and system night/day resolution.
+- Do not change old draft/recovery files, file writes, external URI router, permissions or launcher. The V2 font/wrap/gutter settings remain independent.
+- **New CI and phone acceptance NOT YET RUN for this shared-theme commit.** Keep PR draft. Next: verify GitHub Actions and isolated APK, then test all themes in both directions.
+
+---
+
 ## Current milestone — opt-in V2 navigation from Original (2026-11-11)
 
 - **Verified baseline:** PR #23 merged to `main` at `309134c44834112b4d2b731c475dddad676f4049`. User confirmed physical phone tests 1–5 PASS and GitHub Actions run #43022329708 SUCCESS on the tested isolated APK.

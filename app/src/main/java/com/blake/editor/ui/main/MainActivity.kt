@@ -2,6 +2,7 @@ package com.blake.editor.ui.main
 
 import android.content.Intent
 import android.content.ClipData
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -37,6 +38,7 @@ import com.blake.editor.editor.EditorEvent
 import com.blake.editor.editor.v2.CodeSyntaxScanner
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
+import com.blake.editor.settings.SharedEditorTheme
 import com.blake.editor.ui.system.EdgeToEdgeController
 import com.blake.editor.ui.preview.V2WorkspacePreviewActivity
 import kotlinx.coroutines.launch
@@ -154,6 +156,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Theme selections in V2 are shared, and Original retains its
+        // existing DataStore for upgrades and previous settings.
+        SharedEditorTheme.read(this)?.let { theme ->
+            if (viewModel.uiState.value.themeMode != theme) {
+                viewModel.setThemeMode(theme)
+            }
+        }
         if (::nativeEditor.isInitialized) {
             scheduleSyntaxHighlight(viewModel.uiState.value.syntaxMode, immediate = true)
         }
@@ -320,7 +329,7 @@ class MainActivity : AppCompatActivity() {
             if (!current.isPreviewing && current.syntaxMode == mode &&
                 nativeEditor.text?.toString() == snapshot) {
                 nativeEditor.applySyntaxTokens(tokens,
-                    NativeCodePresentation.colorsFor(current.themeMode))
+                    NativeCodePresentation.colorsFor(effectiveTheme(current.themeMode)))
             }
         }
     }
@@ -330,7 +339,7 @@ class MainActivity : AppCompatActivity() {
             when (event) {
                 is EditorEvent.EditorReady -> {
                     val state = viewModel.uiState.value
-                    editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                    editorController.execute(EditorCommand.SetTheme(effectiveTheme(state.themeMode)))
                     if (state.isPreviewing) {
                         editorController.execute(EditorCommand.ShowPreview(state.content))
                     }
@@ -418,8 +427,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openBlakeV2() {
-        // The Original Activity remains alive. onPause() flushes its draft.
-        // Never reuse the V1 editor's file URI or pass unsaved text to V2.
+        // First opt-in after upgrade: Original's current selection wins.
+        // After that, the last explicit change in either editor wins.
+        if (SharedEditorTheme.read(this) == null) {
+            SharedEditorTheme.remember(this, viewModel.uiState.value.themeMode)
+        }
+        // No document or draft is passed to V2.
         startActivity(Intent(this, V2WorkspacePreviewActivity::class.java))
     }
 
@@ -431,7 +444,9 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(R.string.dialog_theme_title)
             .setSingleChoiceItems(themeNames, currentIndex) { dialog, which ->
-                viewModel.setThemeMode(themes[which])
+                val selected = themes[which]
+                SharedEditorTheme.remember(this, selected)
+                viewModel.setThemeMode(selected)
                 dialog.dismiss()
             }
             .setNegativeButton(R.string.dialog_cancel, null)
@@ -488,12 +503,12 @@ class MainActivity : AppCompatActivity() {
                     val modeChanged = state.syntaxMode != lastSyntaxMode
                     if (themeChanged) {
                         lastAppliedTheme = state.themeMode
-                        applyThemePalette(state.themeMode)
-                        editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                        applyThemePalette(effectiveTheme(state.themeMode))
+                        editorController.execute(EditorCommand.SetTheme(effectiveTheme(state.themeMode)))
                     }
                     if (modeChanged || themeChanged) {
                         lastSyntaxMode = state.syntaxMode
-                        val palette = ThemeController.getPalette(state.themeMode)
+                        val palette = ThemeController.getPalette(effectiveTheme(state.themeMode))
                         nativeEditor.configureGutter(
                             NativeCodePresentation.showLineNumbers(state.syntaxMode),
                             palette.surfaceColor, palette.secondaryTextColor
@@ -528,6 +543,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun effectiveTheme(mode: ThemeMode): ThemeMode {
+        val dark = (resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        return mode.resolvedForSystem(dark)
     }
 
     private fun applyThemePalette(themeMode: ThemeMode) {
