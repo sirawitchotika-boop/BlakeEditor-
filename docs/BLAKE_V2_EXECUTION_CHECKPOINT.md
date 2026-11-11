@@ -5,6 +5,15 @@
 **Repository:** `sirawitchotika-boop/BlakeEditor-`  
 **Checkpoint branch:** `docs/blake-v2-remaining-work-plan-2026-11-12` (draft PR #31; NOT `main`).
 
+## Phase D — targeted recovery fix (2026-11-12, Asia/Bangkok)
+
+- **Phase:** D; **Status:** `WAITING_CI` for exact-head PR checks. One confirmed P0 cross-instance recovery mutation race from Phase B was addressed in a separate [draft PR #33](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/33). **Do not treat the fix as verified or integrate until exact-head CI succeeds.**
+- **Live refs verified:** `main` = `309134c44834112b4d2b731c475dddad676f4049`. Open draft/unmerged heads: #24 `4f6fccd0a5675a67aa2df38ad0b566ae31162a8d`; #25 `bb74f2e86f4ecd01e21f9b2722f3bb83a6faca7d`; #26 `81e8769e660d274688bed49cbb2fb5ad24d8409a`; #27 `10588024d9879c6bd347a9261fb8bd30cc39ba3d`; #29 `72ee83d240e440ded0b3126025da83f50581d544`; #30 `09f0004f27fe8209ff1223c18be47b76303af8d0`; docs #31 `1b6b70dd19fe0e8a79bdaf898f5b36cc96839037`; P1 fix #32 `6cc82d837dc19203cf35c92654aa1cbd2472d5b5`. All earlier exact-head PR Actions runs are SUCCESS; #32 [43105595182](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43105595182) completed SUCCESS.
+- **Code changes:** New branch `fix/v2-shared-recovery-mutation-lock-2026-11-12` based on #32. In `RecoveryDraftStore.kt`, replace instance-local mutation synchronization with one process-wide shared lock covering save, rename, Trash/Restore, delete, clearSavedRevision, legacy import, Recent index updates, and Untitled reservations. Preserve existing format, atomic file writes, file routing, Original and production manifest. `RecoveryDraftStoreTest.kt` adds two-store parallel tests for newer revision retention, saved-revision cleanup, and Recent hide sidecar updates. Two changed files only, 2 commits, latest exact head **`ff279d135e6ca5216c9d288f17eb0d309fbcf829`**.
+- **CI:** #33 exact-head GitHub Actions [run 43118525264](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43118525264) was **QUEUED** at the initial check; JVM unit/debug, input regression, unsigned release, manifest/reader assets and isolated package checks are **NOT YET VERIFIED** for this head. No local build, real Android, external SAF provider, or phone tests performed.
+- **Remaining risks:** Cross-process filesystem locking is not addressed (the current app uses one process); concurrent recovery behavior needs exact-head CI and later disposable-data phone acceptance. PR #24 plus #30/#32/#33 combined integration remains untested.
+- **Next:** Recheck PR #33's exact-head CI. If green, Phase E may independently reassess integration gates and combine #24 with the full #30→#32→#33 stack in a nonproduction draft PR. If queued/failing, record `WAITING_CI`/`BLOCKED` and do not integrate.
+
 ## Phase C — UI and maintenance review (2026-11-12, Asia/Bangkok)
 
 - **Phase:** C; **Status:** `PASSED` for the independent read-only UI/maintenance audit; **integration remains BLOCKED** by Phase B's unresolved P0 cross-instance recovery mutation race. No new confirmed P0/P1 UI defect in the inspected source. No app code changed, no new PR.
@@ -64,7 +73,7 @@ All values are a snapshot. Revalidate before acting; do not mark external phone 
 | A — Baseline | 2026-11-12 04:00 | `PASSED` | [Phase A baseline in this checkpoint](#phase-a--live-inventory-and-pr-baseline-2026-11-12-0404-asiabangkok) |
 | B — Data safety review | 2026-11-12 04:45 | `BLOCKED` (P0 race; #32 CI pending) | [P0 finding and P1 draft PR #32](#phase-b--data-safety-review-2026-11-12-asiabangkok) |
 | C — UI / maintenance review | 2026-11-12 05:30 | `PASSED` (independent audit; P0 integration blocker remains) | [Phase C findings and D queue](#phase-c--ui-and-maintenance-review-2026-11-12-asiabangkok) |
-| D — Minimal fixes | 2026-11-12 06:15 | `NOT_STARTED` | — |
+| D — Minimal fixes | 2026-11-12 06:15 | `WAITING_CI` (P0 fix in draft) | [PR #33](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/33), exact head `ff279d135` |
 | E — Integration draft PR | 2026-11-12 07:00 | `NOT_STARTED` | — |
 | F — Final PR-only gate | 2026-11-12 07:45 | `NOT_STARTED` | — |
 
