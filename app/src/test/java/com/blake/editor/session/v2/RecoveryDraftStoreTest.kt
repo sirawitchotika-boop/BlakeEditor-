@@ -71,6 +71,30 @@ class RecoveryDraftStoreTest {
         assertEquals("damaged", broken.readText())
     }
 
+    @Test fun corruptOptionalRecentIndexDoesNotBlockSafeFirstCounterReservation() {
+        val existing = draft(DocumentIdentity.newUntitled(), "keep this text")
+            .copy(displayName = "Untitled 8")
+        store.save(existing).getOrThrow()
+        val index = File(dir, "v2/recent-shortcuts-hidden.index")
+        index.writeText("damaged sidecar")
+        assertEquals(9L, store.reserveUntitledNumber().getOrThrow())
+        assertEquals(10L, store.reserveUntitledNumber().getOrThrow())
+        assertEquals(existing, store.load(existing.id).getOrThrow())
+        assertEquals("damaged sidecar", index.readText())
+        assertTrue(store.list().unreadableFiles.contains(index.name))
+    }
+
+    @Test fun corruptRecoveryStillBlocksNumberingWhenRecentIndexAlsoCorrupt() {
+        val index = File(dir, "v2/recent-shortcuts-hidden.index")
+        index.parentFile!!.mkdirs()
+        index.writeText("damaged sidecar")
+        val recovery = File(dir, "v2/new-00000000-0000-0000-0000-000000000000.recovery")
+        recovery.writeText("damaged recovery")
+        assertTrue(store.reserveUntitledNumber().isFailure)
+        assertEquals("damaged recovery", recovery.readText())
+        assertEquals("damaged sidecar", index.readText())
+    }
+
     @Test fun renameKeepsEveryOtherFieldAndSurvivesReopen() {
         val original = RecoveryDraft(
             DocumentIdentity.newUntitled(), null, "Untitled 1", "MARKDOWN",
