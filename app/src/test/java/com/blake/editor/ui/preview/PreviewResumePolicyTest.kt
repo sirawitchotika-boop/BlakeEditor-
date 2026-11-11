@@ -57,7 +57,7 @@ class PreviewResumePolicyTest {
         val fileId = DocumentIdentity.forUri("content://documents/doc/1")
         val saved = RecoveryDraft(fileId, "content://documents/doc/1",
             "saved.txt", "PLAIN_TEXT", "before", revision = 6,
-            sourceEncoding = "UTF8", sourceSha256 = "test", savedToDisk = true)
+            sourceEncoding = "UTF8", sourceSha256 = "a".repeat(64), savedToDisk = true)
         val pending = ResumeSnapshot(fileId.value, "after", 5, 5, 0, 7)
         val restored = PreviewResumePolicy.restore(saved, pending)!!
         assertFalse(restored.savedToDisk)
