@@ -57,9 +57,11 @@ import java.io.File
 import org.json.JSONObject
 
 /**
- * Isolated DEBUG ONLY preview. Original files change ONLY after an explicit
- * Save; Save As uses the Android document picker. The original Ace editor is
- * unaffected and V2 drafts remain separate from V1 recovery storage.
+ * V2 workspace engine shared with the app source set. The Activity is
+ * registered as a launcher ONLY in the debug manifest; main/release keeps
+ * Blake Editor — Original as its launcher and external document handler.
+ * Original files change ONLY after explicit Save. V2 drafts remain separate
+ * from V1 recovery storage.
  */
 class V2WorkspacePreviewActivity : AppCompatActivity() {
     private val store by lazy { RecoveryDraftStore(File(filesDir, "v2_recovery")) }

@@ -63,6 +63,29 @@ jobs:
       # Phone acceptance uses this *separate* install identity so a different
       # GitHub Actions signing key cannot replace or erase the installed app.
       # The normal debug APK above remains available and unchanged.
+      # Validate the release variant compiles the shared V2 screens, while
+      # keeping them absent from the production launcher and exported routes.
+      # This builds an unsigned release APK only; no publishing or deployment.
+      - name: Build Release Variant (not published)
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Verify Release Launcher and Reader Assets
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)
+          test -n "$APK"
+          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
+          "$AAPT" dump badging "$APK" | grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'"
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > release-manifest-tree.txt
+          grep -F 'ExternalFileRouterActivity' release-manifest-tree.txt
+          if grep -Eq '(V2WorkspacePreviewActivity|InputLabActivity|com.blake.editor.ui.preview.LargeTextReaderActivity)' release-manifest-tree.txt; then
+            echo "ERROR: Debug-only V2 Activity was exposed in the release manifest"
+            exit 1
+          fi
+          "$AAPT" list "$APK" | grep -Fx 'assets/reader/index.html'
+          "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.js'
+          "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.css'
+
       - name: Build Side-by-Side Isolated Test APK
         run: ./gradlew clean assembleDebug -PisolatedTestApk=true --stacktrace
 
