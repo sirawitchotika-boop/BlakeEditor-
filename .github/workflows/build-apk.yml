@@ -87,7 +87,9 @@ jobs:
           "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.css'
 
       - name: Build Side-by-Side Isolated Test APK
-        run: ./gradlew clean assembleDebug -PisolatedTestApk=true --stacktrace
+        # New ID on every run AND retry; no signing-key collision with old
+        # installed test APKs. Each test install starts with empty app data.
+        run: ./gradlew clean assembleDebug "-PisolatedTestApkSuffix=.test${{ github.run_id }}a${{ github.run_attempt }}" --stacktrace
 
       - name: Verify Isolated Test Package ID
         run: |
@@ -95,7 +97,7 @@ jobs:
           APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
           test -n "$APK"
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
-          "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.isolatedtest'"
+          "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.test${{ github.run_id }}a${{ github.run_attempt }}'"
 
       - name: Upload Isolated Test APK Artifact
         uses: actions/upload-artifact@v7
