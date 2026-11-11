@@ -1,3 +1,15 @@
+## Latest checkpoint — Blake 2.0 display foundation (2026-11-11)
+
+- **Merged and phone accepted:** PR #21, main merge commit `25f196875e071f6bd091df6081ac1d7e2e8a9152`. User reported phone checks 1–5 **PASS**, CI run #43013369328 **SUCCESS**.
+- **Current branch:** `feat/blake-v2-share-display-foundations-2026-11-11`, based on `main` at `25f196875e071f6bd091df6081ac1d7e2e8a9152`.
+- **Next incremental step:** Move V2 Preview's native code input view, theme settings, safe-area math and system-bars helper from `src/debug` into `src/main` under the **same package and class names**. Keep V2 Preview using them. This shares UI building blocks with the regular app but **does not move the V2 Activity or enable a V2 production launcher**.
+- Preserve `blake_v2_preview_editor_settings` preference name and user data; add pure JVM coverage for system-following and explicit theme selection. Existing camera/keyboard-inset regression tests still apply.
+- **Forbidden scope:** changing the Original editor, external intents, file size routing, file writers, draft formats, debug-only manifests, dependencies or release behavior.
+- New GitHub Actions build/unit tests and phone tests: **NOT RUN at this checkpoint**.
+- **Next action:** open draft PR, verify CI and APK, then phone-test Preview display/settings, Original input, and external large-file reader. No merge without explicit Boss approval.
+
+---
+
 # Blake Editor — verified checkpoint (2026-11-11)
 
 ## Status — Original editor safe baseline
