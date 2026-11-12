@@ -37,6 +37,8 @@ class MainViewModel(
     private var draftSaveJob: Job? = null
     private var sessionSaveJob: Job? = null
     private var activeDocumentOpen: Job? = null
+    private var startupRestoreJob: Job? = null
+    private val startupRestoreGate = OriginalStartupRestoreGate()
     private val draftMutationMutex = Mutex()
     private val documentSaveGate = SerializedDocumentSaveGate()
     private var editRevision: Long = 0L
@@ -64,6 +66,10 @@ class MainViewModel(
         }
     }
 
+    /** Claim startup once per ViewModel, not once per Activity instance. */
+    internal fun claimInitialActivityAction(hasIncomingDocument: Boolean): OriginalStartupAction =
+        startupRestoreGate.claimInitialAction(hasIncomingDocument)
+
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             settingsRepository.setThemeMode(mode)
@@ -82,10 +88,22 @@ class MainViewModel(
     fun onContentChanged(newContent: String) {
         val previousContent = _uiState.value.content
         if (previousContent == newContent) return
+        // Never replace fresh typing with a late session restore.
+        val restoring = startupRestoreJob?.isActive == true
+        startupRestoreJob?.cancel()
         editRevision += 1
 
         _uiState.update { current ->
-            current.copy(content = newContent, isDirty = true)
+            current.copy(
+                content = newContent,
+                isDirty = true,
+                isLoading = if (restoring) false else current.isLoading,
+                statusMessage = if (restoring) {
+                    "Previous session restore cancelled; new edits kept"
+                } else {
+                    current.statusMessage
+                }
+            )
         }
 
         // Debounce auto-save draft to internal storage
@@ -113,7 +131,8 @@ class MainViewModel(
     }
 
     fun restoreSessionOrDraft() {
-        viewModelScope.launch {
+        startupRestoreJob?.cancel()
+        startupRestoreJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, statusMessage = "Checking for saved session...") }
             val sessionResult = sessionStore.loadSession()
             val session = sessionResult.getOrNull()
@@ -215,6 +234,7 @@ class MainViewModel(
     }
 
     fun openDocument(uri: Uri) {
+        startupRestoreJob?.cancel()
         activeDocumentOpen?.cancel()
         activeDocumentOpen = viewModelScope.launch {
             _uiState.update {
@@ -440,7 +460,7 @@ class MainViewModel(
                 }
 
                 _uiState.update { it.copy(isLoading = true, statusMessage = "Saving to new file...") }
-                documentRepository.write(newUri, contentToSave)
+                documentRepository.writeNewDocument(newUri, contentToSave, oldUri)
                     .onSuccess {
                         val metadata = documentRepository.getMetadata(newUri).getOrNull()
                         val name = metadata?.displayName ?: "saved_file.txt"
@@ -471,6 +491,7 @@ class MainViewModel(
     }
 
     fun newDocument() {
+        startupRestoreJob?.cancel()
         draftSaveJob?.cancel()
         sessionSaveJob?.cancel()
         viewModelScope.launch {
@@ -495,6 +516,8 @@ class MainViewModel(
     }
 
     fun flushDraft() {
+        // Do not replace an existing persisted session with an empty startup state.
+        if (startupRestoreJob?.isActive == true) return
         draftSaveJob?.cancel()
         sessionSaveJob?.cancel()
         viewModelScope.launch {

@@ -10,6 +10,7 @@ import com.blake.editor.session.FileDraftRepository
 import com.blake.editor.session.SessionStore
 import com.blake.editor.settings.DataStoreSettingsRepository
 import com.blake.editor.settings.SettingsRepository
+import java.io.File
 
 class AppContainer(private val context: Context) {
     val documentMetadataReader: DocumentMetadataReader by lazy {
@@ -24,7 +25,8 @@ class AppContainer(private val context: Context) {
         AndroidDocumentRepository(
             contentResolver = context.contentResolver,
             metadataReader = documentMetadataReader,
-            uriPermissionManager = uriPermissionManager
+            uriPermissionManager = uriPermissionManager,
+            backupDirectory = File(context.filesDir, "original-safe-save-backups")
         )
     }
 

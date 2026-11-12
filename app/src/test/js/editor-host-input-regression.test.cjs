@@ -117,3 +117,6 @@ function createEditorHarness() {
 }
 
 console.log("EditorHost typing/caret regression checks passed.");
+
+// Keep this new regression under the existing CI Node test step.
+require("./markdown-sanitizer-fail-closed.test.cjs");
