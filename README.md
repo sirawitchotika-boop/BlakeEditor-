@@ -17,6 +17,7 @@ Blake Editor keeps the existing **Original** editor as the regular app launcher.
 | File reading, encoding and SAF | [`file/`](app/src/main/java/com/blake/editor/file/) |
 | CI / test APKs | [Build Debug APK workflow](.github/workflows/build-apk.yml) |
 | Release and closeout plan | [G–L roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) |
+| Cross-chat automation and CI budget | [Project automation workflow](docs/BLAKE_V2_AUTOMATION_WORKFLOW.md) · [Live checkpoint](docs/BLAKE_V2_AUTOMATION_CHECKPOINT.md) |
 
 ## What the app does
 
