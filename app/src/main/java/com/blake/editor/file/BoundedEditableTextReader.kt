@@ -13,7 +13,10 @@ class OversizedEditableFileException :
     IllegalArgumentException("File exceeds 2 MB; use Large Text Reader")
 
 object BoundedEditableTextReader {
-    fun readUtf8(input: InputStream): String {
+    fun readUtf8(input: InputStream): String = String(readBytes(input), Charsets.UTF_8)
+
+    /** Exact source bytes, bounded by the same editable-file limit. */
+    fun readBytes(input: InputStream): ByteArray {
         val result = ByteArrayOutputStream()
         val chunk = ByteArray(8192)
         var total = 0L
@@ -36,6 +39,6 @@ object BoundedEditableTextReader {
                 total += next
             }
         }
-        return String(result.toByteArray(), Charsets.UTF_8)
+        return result.toByteArray()
     }
 }
