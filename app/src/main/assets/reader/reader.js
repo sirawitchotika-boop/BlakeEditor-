@@ -2,8 +2,10 @@
   "use strict";
   const article = document.getElementById("article");
   const supported = typeof marked !== "undefined" &&
-    typeof DOMPurify !== "undefined" &&
-    typeof DOMPurify.sanitize === "function";
+    marked && typeof marked.parse === "function" &&
+    typeof DOMPurify !== "undefined" && DOMPurify &&
+    typeof DOMPurify.sanitize === "function" &&
+    DOMPurify.isSupported !== false;
 
   function show(markdownText) {
     const content = String(markdownText || "");
@@ -17,6 +19,9 @@
         USE_PROFILES: { html: true },
         FORBID_TAGS: ["img", "iframe", "object", "embed", "video", "audio", "form", "input", "button"]
       });
+      if (typeof clean !== "string") {
+        throw new TypeError("Markdown sanitizer returned non-text HTML");
+      }
       article.innerHTML = clean;
       article.querySelectorAll("a").forEach(function (link) {
         link.addEventListener("click", function (event) {
