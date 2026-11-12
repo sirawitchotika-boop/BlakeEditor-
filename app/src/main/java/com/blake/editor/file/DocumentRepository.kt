@@ -9,6 +9,9 @@ interface DocumentRepository {
     suspend fun write(uri: Uri, content: String): Result<Unit>
     /** SAF CreateDocument destination; never overwrite an existing nonempty file. */
     suspend fun writeNewDocument(uri: Uri, content: String): Result<Unit> = write(uri, content)
+    /** Preserve the verified source encoding when Save As creates a separate file. */
+    suspend fun writeNewDocument(uri: Uri, content: String, sourceUri: Uri?): Result<Unit> =
+        writeNewDocument(uri, content)
     suspend fun create(parentUri: Uri?, displayName: String, content: String): Result<OpenedDocument>
     suspend fun getMetadata(uri: Uri): Result<OpenedDocument>
 }

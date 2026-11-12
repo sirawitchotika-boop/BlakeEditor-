@@ -19,16 +19,23 @@ class AndroidDocumentRepository(
     private val uriPermissionManager: UriPermissionManager,
     private val backupDirectory: File
 ) : DocumentRepository {
-    private val expectedFingerprint = ConcurrentHashMap<String, String>()
+    private val expectedFingerprint = ConcurrentHashMap<String, VerifiedOriginalOpenSnapshot>()
 
     override suspend fun read(uri: Uri): Result<Pair<OpenedDocument, String>> = withContext(Dispatchers.IO) {
         runCatching {
             uriPermissionManager.takePersistablePermissions(uri, isWriteRequired = false)
             val metadata = metadataReader.readMetadata(uri)
+            val key = uri.toString()
+            // A failed or ambiguous decode cannot leave a Save-eligible prior snapshot.
+            expectedFingerprint.remove(key)
             val bytes = readBoundedBytes(uri)
-            // Register only after a successful fully bounded read.
-            expectedFingerprint[uri.toString()] = VerifiedOriginalFileWriter.fingerprint(bytes)
-            Pair(metadata, String(bytes, Charsets.UTF_8))
+            val (text, format) = OriginalDocumentEncodingPolicy.decodeForOriginal(bytes)
+                .getOrThrow()
+            // Only a strictly decoded, bounded source may be saved over later.
+            expectedFingerprint[key] = VerifiedOriginalOpenSnapshot(
+                VerifiedOriginalFileWriter.fingerprint(bytes), format
+            )
+            Pair(metadata, text)
         }
     }
 
@@ -36,28 +43,40 @@ class AndroidDocumentRepository(
         runCatching {
             uriPermissionManager.takePersistablePermissions(uri, isWriteRequired = true)
             val key = uri.toString()
-            val expected = expectedFingerprint[key]
+            val opened = expectedFingerprint[key]
                 ?: throw IllegalStateException(
                     "This file has no verified opening snapshot (possibly restored from a draft). " +
                         "Use Save As to preserve the existing source."
                 )
-            val writer = writerFor(uri)
-            val newHash = writer.saveExisting(expected, content.toByteArray(Charsets.UTF_8))
+            val encoded = OriginalDocumentEncodingPolicy.encodeForSaving(content, opened.format)
                 .getOrThrow()
-            expectedFingerprint[key] = newHash
+            val newHash = writerFor(uri).saveExisting(opened.fingerprint, encoded).getOrThrow()
+            expectedFingerprint[key] = opened.copy(fingerprint = newHash)
         }
     }
 
-    override suspend fun writeNewDocument(uri: Uri, content: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun writeNewDocument(uri: Uri, content: String): Result<Unit> =
+        writeNewDocument(uri, content, null)
+
+    override suspend fun writeNewDocument(
+        uri: Uri,
+        content: String,
+        sourceUri: Uri?
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             uriPermissionManager.takePersistablePermissions(uri, isWriteRequired = true)
             val key = uri.toString()
             check(!expectedFingerprint.containsKey(key)) {
                 "The destination is already open. Choose a new filename to preserve the original."
             }
-            val newHash = writerFor(uri).saveNew(content.toByteArray(Charsets.UTF_8))
+            // Save As copies the source encoding/BOM when we know it. An untitled or
+            // restored draft without a verified source is a new UTF-8 document.
+            val format = sourceUri?.let { expectedFingerprint[it.toString()]?.format }
+                ?: OriginalDocumentEncodingPolicy.utf8
+            val encoded = OriginalDocumentEncodingPolicy.encodeForSaving(content, format)
                 .getOrThrow()
-            expectedFingerprint[key] = newHash
+            val newHash = writerFor(uri).saveNew(encoded).getOrThrow()
+            expectedFingerprint[key] = VerifiedOriginalOpenSnapshot(newHash, format)
         }
     }
 

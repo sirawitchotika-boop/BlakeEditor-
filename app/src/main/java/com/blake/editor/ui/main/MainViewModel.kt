@@ -440,7 +440,7 @@ class MainViewModel(
                 }
 
                 _uiState.update { it.copy(isLoading = true, statusMessage = "Saving to new file...") }
-                documentRepository.writeNewDocument(newUri, contentToSave)
+                documentRepository.writeNewDocument(newUri, contentToSave, oldUri)
                     .onSuccess {
                         val metadata = documentRepository.getMetadata(newUri).getOrNull()
                         val name = metadata?.displayName ?: "saved_file.txt"
