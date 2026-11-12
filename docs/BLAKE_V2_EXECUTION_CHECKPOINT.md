@@ -5,6 +5,17 @@
 **Repository:** `sirawitchotika-boop/BlakeEditor-`  
 **Checkpoint branch:** `docs/blake-v2-remaining-work-plan-2026-11-12` (draft PR #31; NOT `main`).
 
+## Phase E — isolated nonproduction integration (2026-11-12, Asia/Bangkok)
+
+- **Phase:** E; **Status:** `WAITING_CI` — integration draft PR created, exact-head combined checks not yet observed. [Draft PR #34](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/34) targets `main` from `integration/v2-beta-drafts-safety-2026-11-12`; integrated exact head **`30285c7912a057000ec2dcac2242251418cc2130`**.
+- **Current main:** `309134c44834112b4d2b731c475dddad676f4049` (unchanged). **Sources:** optional beta entry #24 `4f6fccd0a5675a67aa2df38ad0b566ae31162a8d`; stacked draft management #25/#26/#27/#29/#30 at `09f0004f27fe8209ff1223c18be47b76303af8d0`; P1 safety #32 `6cc82d837dc19203cf35c92654aa1cbd2472d5b5`; P0 shared recovery lock #33 `ff279d135e6ca5216c9d288f17eb0d309fbcf829`. All source PRs remain draft, open, and unmerged.
+- **Dependency gate now cleared for staging:** #32 exact-head [CI 43105595182](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43105595182) **SUCCESS**. #33 exact-head [CI 43118525264](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43118525264) **SUCCESS**, including input/caret regression, JVM tests/debug build, unsigned release build, Original launcher/reader checks, isolated APK package ID and artifact upload. B/C independent reviews were complete; no remaining confirmed P0/P1 blocker at those source heads. No physical phone tests.
+- **Integration method:** From exact `main` create a new nonproduction branch and one snapshot commit, with exact file blobs from #24 and #33 (the latter contains #25→#30 plus #32). Their changed-file sets are **disjoint**, with **zero overlapping paths**; 26 code/test/manifest/workflow files staged. Only #24's historical `TASK_PROGRESS.md` note excluded. No GitHub merge operation or PR merge performed. Source SHAs documented in integration commit/PR for traceability.
+- **Safety check:** Integrated release manifest still declares Original `.ui.main.MainActivity` as MAIN/LAUNCHER, keeps `ExternalFileRouterActivity`, and keeps V2 Beta internal-only, non-exported. Main, installed apps, recovery records, external files, signing, production launcher and release unchanged.
+- **Integrated CI:** workflow includes `pull_request` trigger, but exact-head workflow run was **not yet returned** when checked. Do not call integrated build/test PASS. Recheck PR #34 at exact `30285c7912a057000ec2dcac2242251418cc2130`; if running, `WAITING_CI`; if failed, `BLOCKED`.
+- **Human gate:** Original typing/file safety, V2 code/Markdown/theme, drafts/rename/Trash/Restore/Recent, Save/Save As/encoding/large-file read-only, cold start/background/theme and file integrity with disposable data only. No phone PASS, merge, launcher switch or release.
+- **Next:** Phase F inspect exact integrated PR #34 head and GitHub Actions checks; deliver `READY_FOR_HUMAN_GATE` only if all required combined PR-only checks pass, otherwise precise `WAITING_CI` or `BLOCKED`.
+
 ## Phase D — targeted recovery fix (2026-11-12, Asia/Bangkok)
 
 - **Phase:** D; **Status:** `WAITING_CI` for exact-head PR checks. One confirmed P0 cross-instance recovery mutation race from Phase B was addressed in a separate [draft PR #33](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/33). **Do not treat the fix as verified or integrate until exact-head CI succeeds.**
@@ -74,7 +85,7 @@ All values are a snapshot. Revalidate before acting; do not mark external phone 
 | B — Data safety review | 2026-11-12 04:45 | `BLOCKED` (P0 race; #32 CI pending) | [P0 finding and P1 draft PR #32](#phase-b--data-safety-review-2026-11-12-asiabangkok) |
 | C — UI / maintenance review | 2026-11-12 05:30 | `PASSED` (independent audit; P0 integration blocker remains) | [Phase C findings and D queue](#phase-c--ui-and-maintenance-review-2026-11-12-asiabangkok) |
 | D — Minimal fixes | 2026-11-12 06:15 | `WAITING_CI` (P0 fix in draft) | [PR #33](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/33), exact head `ff279d135` |
-| E — Integration draft PR | 2026-11-12 07:00 | `NOT_STARTED` | — |
+| E — Integration draft PR | 2026-11-12 07:00 | `WAITING_CI` (draft PR created; integrated CI pending) | [PR #34](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/34), exact head `30285c791` |
 | F — Final PR-only gate | 2026-11-12 07:45 | `NOT_STARTED` | — |
 
 `NOT_STARTED` = not run; `PASSED` = evidenced complete; `NO_FIX_REQUIRED` = no defects found for D; `PARTIAL` = work done but unfinished; `WAITING_CI` = exact-head checks incomplete; `BLOCKED` = unsafe to proceed; `ALREADY_DONE` = verified idempotent skip; `READY_FOR_HUMAN_GATE` = CI/review ready, but human phone/release approval still required.
