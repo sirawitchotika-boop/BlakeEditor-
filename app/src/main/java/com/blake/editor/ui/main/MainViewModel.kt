@@ -89,11 +89,21 @@ class MainViewModel(
         val previousContent = _uiState.value.content
         if (previousContent == newContent) return
         // Never replace fresh typing with a late session restore.
+        val restoring = startupRestoreJob?.isActive == true
         startupRestoreJob?.cancel()
         editRevision += 1
 
         _uiState.update { current ->
-            current.copy(content = newContent, isDirty = true)
+            current.copy(
+                content = newContent,
+                isDirty = true,
+                isLoading = if (restoring) false else current.isLoading,
+                statusMessage = if (restoring) {
+                    "Previous session restore cancelled; new edits kept"
+                } else {
+                    current.statusMessage
+                }
+            )
         }
 
         // Debounce auto-save draft to internal storage
