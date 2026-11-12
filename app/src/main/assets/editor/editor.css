@@ -126,6 +126,22 @@ html, body {
     background: #666666;
 }
 
+/* Light mode — native and Markdown contrast matches Blake 2.0. */
+body.theme-light,
+body.theme-light #editor,
+body.theme-light .ace-chrome,
+body.theme-light .ace-chrome .ace_gutter {
+    background-color: #F6F7FA !important;
+    color: #202939;
+}
+body.theme-light #preview { background-color: #F6F7FA; color: #202939; }
+body.theme-light #preview a { color: #0369A1; }
+body.theme-light #preview pre { background-color: #E9EDF3; border: 1px solid #CBD5E1; }
+body.theme-light #preview code { background-color: #E9EDF3; color: #202939; }
+body.theme-light #preview blockquote { border-left-color: #CBD5E1; color: #475569; }
+body.theme-light #preview hr { background-color: #CBD5E1; }
+body.theme-light #preview table th { background-color: #E9EDF3; }
+
 /* Theme Mode: Dark (Default) */
 body.theme-dark {
     background-color: #121212;

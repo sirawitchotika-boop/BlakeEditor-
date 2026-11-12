@@ -10,10 +10,11 @@ package com.blake.editor.session.v2
 class DraftWorkspace(private val store: RecoveryDraftStore) {
 
     fun createUntitled(): Result<RecoveryDraft> = runCatching {
+        val nextNumber = store.reserveUntitledNumber().getOrThrow()
         val draft = RecoveryDraft(
             id = DocumentIdentity.newUntitled(),
             sourceUri = null,
-            displayName = "Untitled",
+            displayName = "Untitled $nextNumber",
             language = "PLAIN_TEXT",
             content = ""
         )
@@ -33,11 +34,17 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
         val id = DocumentIdentity.forUri(sourceUri)
         val existing = store.load(id).getOrThrow()
         if (existing != null) {
+            check(existing.trashedAtMs == null) {
+                "This file has an unfinished recovery draft in Trash. Its data was kept; restore it before editing."
+            }
             if (existing.savedToDisk && existing.sourceSha256 != null &&
                 sourceSha256 != null && existing.sourceSha256 != sourceSha256
             ) {
                 error("This file changed outside Blake. Recovery record retained; inspect the file and use Save As.")
             }
+            // A failure in optional Recent shortcut metadata must never block
+            // reopening the real file or discard its recovery record.
+            store.showInRecent(id)
             return@runCatching existing
         }
 
@@ -53,6 +60,7 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
             savedToDisk = encoding != null && sourceSha256 != null
         )
         store.save(draft).getOrThrow()
+        store.showInRecent(id)
         draft
     }
 
@@ -85,6 +93,37 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
         )
     }
 
+    /** Hide the shortcut without touching the stored draft or the real file. */
+    fun removeFromRecent(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = store.hideFromRecent(id, expectedRevision)
+
+    /** Metadata-only rename; the real file remains unchanged. */
+    fun renameDraft(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        enteredName: String
+    ): Result<RecoveryDraft> = store.renameDisplayName(id, expectedRevision, enteredName)
+
+    /** Hide an already-persisted unfinished draft only after atomic Trash storage. */
+    fun moveToTrash(id: DocumentIdentity, expectedRevision: Long): Result<RecoveryDraft> =
+        store.moveToTrash(id, expectedRevision)
+
+    /** Restore only the private draft; linked files must be verified by the caller. */
+    fun restoreFromTrash(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        sourceMatches: Boolean
+    ): Result<DraftRestoreResult> =
+        store.restoreFromTrash(id, expectedRevision, sourceMatches)
+
+    /** Irreversible only after an explicit Trash confirmation in the UI. */
+    fun deleteTrashedPermanently(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = store.deleteTrashedPermanently(id, expectedRevision)
+
     fun persist(current: RecoveryDraft): Result<Unit> = store.save(current)
 
     /** The caller must not leave the editor when this returns a failure. */
@@ -94,8 +133,10 @@ class DraftWorkspace(private val store: RecoveryDraftStore) {
     fun switchTo(current: RecoveryDraft, targetId: DocumentIdentity): Result<RecoveryDraft> =
         runCatching {
             store.save(current).getOrThrow()
-            store.load(targetId).getOrThrow()
+            val target = store.load(targetId).getOrThrow()
                 ?: error("The selected recovery draft is missing")
+            check(target.trashedAtMs == null) { "That draft is in Trash" }
+            target
         }
 
     fun load(id: DocumentIdentity): Result<RecoveryDraft?> = store.load(id)

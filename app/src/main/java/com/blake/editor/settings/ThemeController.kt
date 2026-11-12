@@ -28,6 +28,13 @@ object ThemeController {
     const val COLOR_AMOLED_BUTTON_BG = 0xFF1A1A1A.toInt()
     const val COLOR_AMOLED_BUTTON_TEXT = 0xFFFFFFFF.toInt()
 
+    const val COLOR_LIGHT_BG = 0xFFF6F7FA.toInt()
+    const val COLOR_LIGHT_SURFACE = 0xFFFFFFFF.toInt()
+    const val COLOR_LIGHT_TEXT_PRIMARY = 0xFF202939.toInt()
+    const val COLOR_LIGHT_TEXT_SECONDARY = 0xFF64748B.toInt()
+    const val COLOR_LIGHT_BUTTON_BG = 0xFFE9EDF3.toInt()
+    const val COLOR_LIGHT_BUTTON_TEXT = 0xFF202939.toInt()
+
     const val COLOR_EYE_CARE_BG = 0xFFF8F1E5.toInt()
     const val COLOR_EYE_CARE_SURFACE = 0xFFEDE4D3.toInt()
     const val COLOR_EYE_CARE_TEXT_PRIMARY = 0xFF2C2523.toInt()
@@ -37,7 +44,7 @@ object ThemeController {
 
     fun getPalette(mode: ThemeMode): ThemePalette {
         return when (mode) {
-            ThemeMode.DARK -> ThemePalette(
+            ThemeMode.FOLLOW_SYSTEM, ThemeMode.DARK -> ThemePalette(
                 backgroundColor = COLOR_DARK_BG,
                 surfaceColor = COLOR_DARK_SURFACE,
                 primaryTextColor = COLOR_DARK_TEXT_PRIMARY,
@@ -45,6 +52,15 @@ object ThemeController {
                 buttonBackgroundColor = COLOR_DARK_BUTTON_BG,
                 buttonTextColor = COLOR_DARK_BUTTON_TEXT,
                 aceThemeName = "twilight"
+            )
+            ThemeMode.LIGHT -> ThemePalette(
+                backgroundColor = COLOR_LIGHT_BG,
+                surfaceColor = COLOR_LIGHT_SURFACE,
+                primaryTextColor = COLOR_LIGHT_TEXT_PRIMARY,
+                secondaryTextColor = COLOR_LIGHT_TEXT_SECONDARY,
+                buttonBackgroundColor = COLOR_LIGHT_BUTTON_BG,
+                buttonTextColor = COLOR_LIGHT_BUTTON_TEXT,
+                aceThemeName = "chrome"
             )
             ThemeMode.AMOLED -> ThemePalette(
                 backgroundColor = COLOR_AMOLED_BG,

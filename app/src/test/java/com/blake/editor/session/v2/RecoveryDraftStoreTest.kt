@@ -3,6 +3,9 @@ package com.blake.editor.session.v2
 import java.io.File
 import java.nio.file.Files
 import java.util.Properties
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -23,6 +26,85 @@ class RecoveryDraftStoreTest {
     private fun draft(id: DocumentIdentity, text: String, version: Long = 1): RecoveryDraft =
         RecoveryDraft(id, null, "Untitled", "PLAIN_TEXT", text, revision = version)
 
+
+    private fun runTogether(first: () -> Unit, second: () -> Unit) {
+        val executor = Executors.newFixedThreadPool(2)
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        try {
+            val tasks = listOf(first, second).map { action ->
+                executor.submit {
+                    ready.countDown()
+                    check(start.await(5, TimeUnit.SECONDS))
+                    action()
+                }
+            }
+            assertTrue("Both writers should be ready", ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+            tasks.forEach { it.get(20, TimeUnit.SECONDS) }
+        } finally {
+            start.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun concurrentStoresNeverReplaceNewerRecoveryWithStaleText() {
+        val secondStore = RecoveryDraftStore(File(dir, "v2"))
+        repeat(20) { iteration ->
+            val id = DocumentIdentity.newUntitled()
+            store.save(draft(id, "baseline", 1)).getOrThrow()
+            var newerSaved = false
+            runTogether(
+                { store.save(draft(id, "older-$iteration", 2)) },
+                { newerSaved = secondStore.save(draft(id, "newer-$iteration", 3)).isSuccess }
+            )
+            assertTrue("Newer revision must save", newerSaved)
+            val persisted = store.load(id).getOrThrow()
+            assertEquals(3L, persisted?.revision)
+            assertEquals("newer-$iteration", persisted?.content)
+        }
+    }
+
+    @Test fun concurrentSavedRevisionCleanupCannotDeleteNewerRecovery() {
+        val secondStore = RecoveryDraftStore(File(dir, "v2"))
+        repeat(20) { iteration ->
+            val id = DocumentIdentity.newUntitled()
+            store.save(draft(id, "old", 1)).getOrThrow()
+            var newerSaved = false
+            runTogether(
+                { store.clearSavedRevision(id, 1).getOrThrow() },
+                { newerSaved = secondStore.save(draft(id, "unsaved-$iteration", 2)).isSuccess }
+            )
+            assertTrue("Newer recovery must save", newerSaved)
+            val persisted = store.load(id).getOrThrow()
+            assertEquals(2L, persisted?.revision)
+            assertEquals("unsaved-$iteration", persisted?.content)
+        }
+    }
+
+    @Test fun concurrentRecentHidesKeepBothShortcutIds() {
+        val secondStore = RecoveryDraftStore(File(dir, "v2"))
+        repeat(12) { iteration ->
+            val firstUri = "content://example/recent/first-$iteration.txt"
+            val secondUri = "content://example/recent/second-$iteration.txt"
+            val firstId = DocumentIdentity.forUri(firstUri)
+            val secondId = DocumentIdentity.forUri(secondUri)
+            store.save(RecoveryDraft(firstId, firstUri, "first.txt", "PLAIN_TEXT",
+                "one", sourceEncoding = "UTF8", sourceSha256 = "a".repeat(64),
+                savedToDisk = true)).getOrThrow()
+            store.save(RecoveryDraft(secondId, secondUri, "second.txt", "PLAIN_TEXT",
+                "two", sourceEncoding = "UTF8", sourceSha256 = "b".repeat(64),
+                savedToDisk = true)).getOrThrow()
+            runTogether(
+                { store.hideFromRecent(firstId, 1).getOrThrow() },
+                { secondStore.hideFromRecent(secondId, 1).getOrThrow() }
+            )
+            val hidden = store.list().hiddenRecentIds
+            assertTrue(hidden.contains(firstId))
+            assertTrue(hidden.contains(secondId))
+        }
+    }
+
     @Test fun twoUntitledDocumentsCannotOverwriteEachOther() {
         val one = DocumentIdentity.newUntitled()
         val two = DocumentIdentity.newUntitled()
@@ -33,6 +115,375 @@ class RecoveryDraftStoreTest {
         assertEquals("second", store.load(two).getOrThrow()?.content)
         assertEquals(2, store.list().drafts.size)
         assertTrue(store.list().unreadableFiles.isEmpty())
+    }
+
+    @Test fun reservationIsDurableEvenIfTheDraftIsNotCreated() {
+        // A crash between counter reservation and draft creation must skip that number.
+        assertEquals(1L, store.reserveUntitledNumber().getOrThrow())
+        val next = DraftWorkspace(RecoveryDraftStore(File(dir, "v2")))
+            .createUntitled().getOrThrow()
+        assertEquals("Untitled 2", next.displayName)
+    }
+
+    @Test fun firstCounterStartsAbovePreexistingNumberedDrafts() {
+        val older = draft(DocumentIdentity.newUntitled(), "older")
+            .copy(displayName = "Untitled 8")
+        store.save(older).getOrThrow()
+        val newDraft = DraftWorkspace(store).createUntitled().getOrThrow()
+        assertEquals("Untitled 9", newDraft.displayName)
+        assertEquals("Untitled 8", store.load(older.id).getOrThrow()?.displayName)
+    }
+
+    @Test fun invalidCounterNeverSilentlyResetsOrChangesExistingDraft() {
+        val old = draft(DocumentIdentity.newUntitled(), "preserve me")
+        store.save(old).getOrThrow()
+        assertEquals(1L, store.reserveUntitledNumber().getOrThrow())
+        val counter = File(dir, "v2/next-untitled-number.counter")
+        counter.writeText("corrupt")
+        assertTrue(DraftWorkspace(store).createUntitled().isFailure)
+        assertEquals(old, store.load(old.id).getOrThrow())
+        assertEquals("corrupt", counter.readText())
+    }
+
+    @Test fun unreadableRecoveryBlocksUnsafeCounterInitialization() {
+        val broken = File(dir, "v2/new-00000000-0000-0000-0000-000000000000.recovery")
+        broken.parentFile!!.mkdirs()
+        broken.writeText("damaged")
+        assertTrue(store.reserveUntitledNumber().isFailure)
+        assertEquals("damaged", broken.readText())
+    }
+
+    @Test fun corruptOptionalRecentIndexDoesNotBlockSafeFirstCounterReservation() {
+        val existing = draft(DocumentIdentity.newUntitled(), "keep this text")
+            .copy(displayName = "Untitled 8")
+        store.save(existing).getOrThrow()
+        val index = File(dir, "v2/recent-shortcuts-hidden.index")
+        index.writeText("damaged sidecar")
+        assertEquals(9L, store.reserveUntitledNumber().getOrThrow())
+        assertEquals(10L, store.reserveUntitledNumber().getOrThrow())
+        assertEquals(existing, store.load(existing.id).getOrThrow())
+        assertEquals("damaged sidecar", index.readText())
+        assertTrue(store.list().unreadableFiles.contains(index.name))
+    }
+
+    @Test fun corruptRecoveryStillBlocksNumberingWhenRecentIndexAlsoCorrupt() {
+        val index = File(dir, "v2/recent-shortcuts-hidden.index")
+        index.parentFile!!.mkdirs()
+        index.writeText("damaged sidecar")
+        val recovery = File(dir, "v2/new-00000000-0000-0000-0000-000000000000.recovery")
+        recovery.writeText("damaged recovery")
+        assertTrue(store.reserveUntitledNumber().isFailure)
+        assertEquals("damaged recovery", recovery.readText())
+        assertEquals("damaged sidecar", index.readText())
+    }
+
+    @Test fun renameKeepsEveryOtherFieldAndSurvivesReopen() {
+        val original = RecoveryDraft(
+            DocumentIdentity.newUntitled(), null, "Untitled 1", "MARKDOWN",
+            "Unsent text 🌏", selectionStart = 2, selectionEnd = 6, scrollY = 87,
+            revision = 5, updatedAtMs = 5
+        )
+        store.save(original).getOrThrow()
+        val renamed = store.renameDisplayName(original.id, 5, "  Writing ideas  ").getOrThrow()
+        assertEquals("Writing ideas", renamed.displayName)
+        assertEquals(6L, renamed.revision)
+        assertEquals(original, renamed.copy(
+            displayName = original.displayName,
+            revision = original.revision,
+            updatedAtMs = original.updatedAtMs
+        ))
+        assertEquals(renamed, RecoveryDraftStore(File(dir, "v2")).load(original.id).getOrThrow())
+    }
+
+    @Test fun renameRejectsInvalidAndStaleRequestsWithoutDiscardingBuffer() {
+        val original = draft(DocumentIdentity.newUntitled(), "private unsaved text", 2)
+        store.save(original).getOrThrow()
+        assertTrue(store.renameDisplayName(original.id, 2, "  ").isFailure)
+        assertTrue(store.renameDisplayName(original.id, 2, "a".repeat(9000)).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        val newer = original.copy(content = "newer buffer", revision = 3)
+        store.save(newer).getOrThrow()
+        assertTrue(store.renameDisplayName(original.id, 2, "Stale name").isFailure)
+        assertEquals(newer, store.load(original.id).getOrThrow())
+        assertTrue(store.renameDisplayName(DocumentIdentity.newUntitled(), 1, "Missing").isFailure)
+        assertEquals(newer, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun unchangedAndDuplicateCustomNamesDoNotChangeIdentity() {
+        val one = draft(DocumentIdentity.newUntitled(), "one")
+        val two = draft(DocumentIdentity.newUntitled(), "two")
+        store.save(one).getOrThrow()
+        store.save(two).getOrThrow()
+        val first = store.renameDisplayName(one.id, 1, "My Notes").getOrThrow()
+        val second = store.renameDisplayName(two.id, 1, "My Notes").getOrThrow()
+        assertNotEquals(first.id, second.id)
+        assertEquals("My Notes", first.displayName)
+        assertEquals("My Notes", second.displayName)
+        assertEquals(first, store.renameDisplayName(one.id, 2, " My Notes ").getOrThrow())
+    }
+
+    @Test fun renameCannotTouchDraftAlreadyMarkedTrashed() {
+        val trashed = draft(DocumentIdentity.newUntitled(), "safe")
+            .copy(trashedAtMs = 123L)
+        store.save(trashed).getOrThrow()
+        assertTrue(store.renameDisplayName(trashed.id, 1, "Hidden").isFailure)
+        assertEquals(trashed, store.load(trashed.id).getOrThrow())
+    }
+
+    @Test fun renamingLinkedUnsavedFileKeepsItsUriAndHash() {
+        val uri = "content://provider/docs/important.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "important.txt", language = "PLAIN_TEXT",
+            content = "Unsaved change", selectionStart = 4, selectionEnd = 7, scrollY = 13,
+            revision = 3, sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val renamed = store.renameDisplayName(original.id, 3, "Private idea").getOrThrow()
+        assertEquals(original.sourceUri, renamed.sourceUri)
+        assertEquals(original.id, renamed.id)
+        assertEquals(original.sourceSha256, renamed.sourceSha256)
+        assertEquals(original.content, renamed.content)
+        assertEquals(original.selectionStart, renamed.selectionStart)
+        assertEquals(original.selectionEnd, renamed.selectionEnd)
+        assertEquals(original.scrollY, renamed.scrollY)
+        assertEquals(original.savedToDisk, renamed.savedToDisk)
+    }
+
+    @Test fun movingDraftToTrashKeepsTheFullRecoveryRecordAfterRestart() {
+        val source = "content://provider/docs/notes.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(source), sourceUri = source,
+            displayName = "notes.txt", language = "PLAIN_TEXT",
+            content = "Unsaved text 🌏\nAnother line",
+            selectionStart = 2, selectionEnd = 9, scrollY = 117,
+            revision = 6, sourceEncoding = "UTF8", sourceHadBom = true,
+            sourceSha256 = "b".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, original.revision).getOrThrow()
+        assertEquals(original.id, trashed.id)
+        assertEquals(original, trashed.copy(
+            trashedAtMs = null,
+            revision = original.revision,
+            updatedAtMs = original.updatedAtMs
+        ))
+        assertTrue(trashed.trashedAtMs != null)
+        val restarted = RecoveryDraftStore(File(dir, "v2"))
+        assertEquals(trashed, restarted.load(original.id).getOrThrow())
+        assertEquals(listOf(trashed), restarted.list().drafts)
+    }
+
+    @Test fun failedAndStaleTrashMovesDoNotHideOrRemoveTheDraft() {
+        val original = draft(DocumentIdentity.newUntitled(), "newer text", 4)
+        store.save(original).getOrThrow()
+        assertTrue(store.moveToTrash(original.id, 3).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        assertTrue(store.moveToTrash(DocumentIdentity.newUntitled(), 1).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        val moved = store.moveToTrash(original.id, 4).getOrThrow()
+        assertTrue(store.moveToTrash(original.id, moved.revision).isFailure)
+        assertEquals(moved, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun savedFileCannotBeMovedIntoUnfinishedDraftTrash() {
+        val source = "content://provider/docs/saved.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(source), sourceUri = source,
+            displayName = "saved.txt", language = "PLAIN_TEXT",
+            content = "saved", sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = true
+        )
+        store.save(saved).getOrThrow()
+        assertTrue(store.moveToTrash(saved.id, saved.revision).isFailure)
+        assertEquals(saved, store.load(saved.id).getOrThrow())
+    }
+
+    @Test fun restoresUntitledDraftWithContentCursorScrollAndName() {
+        val original = RecoveryDraft(
+            id = DocumentIdentity.newUntitled(), sourceUri = null,
+            displayName = "Important", language = "MARKDOWN",
+            content = "Keep unsaved words 🌏", selectionStart = 3,
+            selectionEnd = 8, scrollY = 123, revision = 4
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 4).getOrThrow()
+        val result = store.restoreFromTrash(trashed.id, trashed.revision, false).getOrThrow()
+        assertFalse(result.recoveredAsCopy)
+        assertEquals(original.id, result.draft.id)
+        assertEquals(original.content, result.draft.content)
+        assertEquals(original.displayName, result.draft.displayName)
+        assertEquals(original.selectionStart, result.draft.selectionStart)
+        assertEquals(original.selectionEnd, result.draft.selectionEnd)
+        assertEquals(original.scrollY, result.draft.scrollY)
+        assertNull(result.draft.trashedAtMs)
+        assertEquals(result.draft, RecoveryDraftStore(File(dir, "v2"))
+            .load(original.id).getOrThrow())
+    }
+
+    @Test fun unchangedVerifiedLinkedFileRestoresTheSameDraftIdentity() {
+        val uri = "content://provider/document.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "document.txt", language = "PLAIN_TEXT",
+            content = "unsaved", sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 1).getOrThrow()
+        val restored = store.restoreFromTrash(trashed.id, trashed.revision, true).getOrThrow()
+        assertFalse(restored.recoveredAsCopy)
+        assertEquals(uri, restored.draft.sourceUri)
+        assertEquals(original.sourceSha256, restored.draft.sourceSha256)
+        assertEquals(original.id, restored.draft.id)
+        assertNull(restored.draft.trashedAtMs)
+    }
+
+    @Test fun changedLinkedSourceRestoresDetachedCopyAndKeepsOriginalTrash() {
+        val uri = "content://provider/document.txt"
+        val original = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "document.txt", language = "PLAIN_TEXT",
+            content = "never lose unsaved data", selectionStart = 2,
+            selectionEnd = 5, scrollY = 48, revision = 3,
+            sourceEncoding = "UTF8", sourceHadBom = true,
+            sourceSha256 = "a".repeat(64), savedToDisk = false
+        )
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 3).getOrThrow()
+        val result = store.restoreFromTrash(trashed.id, trashed.revision, false).getOrThrow()
+        assertTrue(result.recoveredAsCopy)
+        assertNotEquals(original.id, result.draft.id)
+        assertNull(result.draft.sourceUri)
+        assertNull(result.draft.sourceSha256)
+        assertEquals("Recovered — document.txt", result.draft.displayName)
+        assertEquals(original.content, result.draft.content)
+        assertEquals(original.selectionStart, result.draft.selectionStart)
+        assertEquals(original.selectionEnd, result.draft.selectionEnd)
+        assertEquals(original.scrollY, result.draft.scrollY)
+        assertEquals(original.sourceEncoding, result.draft.sourceEncoding)
+        assertEquals(original.sourceHadBom, result.draft.sourceHadBom)
+        assertFalse(result.draft.savedToDisk)
+        assertNull(result.draft.trashedAtMs)
+        assertEquals(trashed, store.load(original.id).getOrThrow())
+        val restarted = RecoveryDraftStore(File(dir, "v2"))
+        assertEquals(result.draft, restarted.load(result.draft.id).getOrThrow())
+        assertEquals(2, restarted.list().drafts.size)
+    }
+
+    @Test fun unverifiedLinkedSourceAlwaysRestoresDetachedEvenIfCallerSaysMatches() {
+        val uri = "content://provider/unknown.txt"
+        val original = RecoveryDraft(DocumentIdentity.forUri(uri), uri, "unknown.txt",
+            "PLAIN_TEXT", "preserve", revision = 3)
+        store.save(original).getOrThrow()
+        val trashed = store.moveToTrash(original.id, 3).getOrThrow()
+        val restored = store.restoreFromTrash(trashed.id, trashed.revision, true).getOrThrow()
+        assertTrue(restored.recoveredAsCopy)
+        assertNull(restored.draft.sourceUri)
+        assertEquals(trashed, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun staleRestoreAndNonTrashDeletionFailWithoutChangingRecords() {
+        val original = draft(DocumentIdentity.newUntitled(), "important", 2)
+        store.save(original).getOrThrow()
+        assertTrue(store.restoreFromTrash(original.id, 2, false).isFailure)
+        assertTrue(store.deleteTrashedPermanently(original.id, 2).isFailure)
+        assertEquals(original, store.load(original.id).getOrThrow())
+        val trashed = store.moveToTrash(original.id, 2).getOrThrow()
+        assertTrue(store.restoreFromTrash(original.id, 2, false).isFailure)
+        assertTrue(store.deleteTrashedPermanently(original.id, 2).isFailure)
+        assertTrue(store.restoreFromTrash(DocumentIdentity.newUntitled(), 1, false).isFailure)
+        assertEquals(trashed, store.load(original.id).getOrThrow())
+    }
+
+    @Test fun confirmedDeletionCanOnlyRemoveTrashedRecoveryRecord() {
+        val one = draft(DocumentIdentity.newUntitled(), "one")
+        val two = draft(DocumentIdentity.newUntitled(), "two")
+        store.save(one).getOrThrow()
+        store.save(two).getOrThrow()
+        val trashed = store.moveToTrash(one.id, one.revision).getOrThrow()
+        assertFalse(store.clearSavedRevision(one.id, trashed.revision).getOrThrow())
+        store.deleteTrashedPermanently(trashed.id, trashed.revision).getOrThrow()
+        assertNull(store.load(one.id).getOrThrow())
+        assertEquals(two, store.load(two.id).getOrThrow())
+        assertTrue(store.deleteTrashedPermanently(trashed.id, trashed.revision).isFailure)
+    }
+
+    @Test fun multipleIndependentDraftsMoveAndDeleteWithoutTouchingUnselected() {
+        val drafts = (1..3).map {
+            draft(DocumentIdentity.newUntitled(), "text $it")
+        }
+        drafts.forEach { store.save(it).getOrThrow() }
+        val moved = drafts.take(2).map { store.moveToTrash(it.id, it.revision).getOrThrow() }
+        assertEquals(2, store.list().drafts.count { it.trashedAtMs != null })
+        assertEquals(drafts[2], store.load(drafts[2].id).getOrThrow())
+        moved.forEach { store.deleteTrashedPermanently(it.id, it.revision).getOrThrow() }
+        assertEquals(listOf(drafts[2]), store.list().drafts)
+    }
+
+    @Test fun recentRemovalHidesShortcutButNeverChangesRecoveryOrRealFile() {
+        val uri = "content://example/recent/report.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "report.txt", language = "PLAIN_TEXT",
+            content = "original content", selectionStart = 3,
+            selectionEnd = 7, scrollY = 37, revision = 4,
+            sourceEncoding = "UTF8", sourceSha256 = "a".repeat(64),
+            savedToDisk = true
+        )
+        store.save(saved).getOrThrow()
+        store.hideFromRecent(saved.id, saved.revision).getOrThrow()
+        assertEquals(saved, store.load(saved.id).getOrThrow())
+        val reopened = RecoveryDraftStore(File(dir, "v2"))
+        val listing = reopened.list()
+        assertEquals(listOf(saved), listing.drafts)
+        assertTrue(listing.hiddenRecentIds.contains(saved.id))
+        assertTrue(V2HomeSections.from(listing).recentlySaved.isEmpty())
+        reopened.showInRecent(saved.id).getOrThrow()
+        assertEquals(listOf(saved), V2HomeSections.from(reopened.list()).recentlySaved)
+    }
+
+    @Test fun recentRemovalRejectsStaleMissingUnsavedAndTrashWithoutChanges() {
+        val uri = "content://example/recent/saved.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "saved.txt", language = "PLAIN_TEXT",
+            content = "safe", sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = true,
+            revision = 6
+        )
+        val unsaved = draft(DocumentIdentity.newUntitled(), "not saved", 2)
+        store.save(saved).getOrThrow()
+        store.save(unsaved).getOrThrow()
+        assertTrue(store.hideFromRecent(saved.id, 5).isFailure)
+        assertTrue(store.hideFromRecent(unsaved.id, 2).isFailure)
+        assertTrue(store.hideFromRecent(DocumentIdentity.newUntitled(), 1).isFailure)
+        assertEquals(saved, store.load(saved.id).getOrThrow())
+        assertEquals(unsaved, store.load(unsaved.id).getOrThrow())
+        assertTrue(store.list().hiddenRecentIds.isEmpty())
+        val trashed = store.moveToTrash(unsaved.id, 2).getOrThrow()
+        assertTrue(store.hideFromRecent(trashed.id, trashed.revision).isFailure)
+        assertEquals(trashed, store.load(trashed.id).getOrThrow())
+    }
+
+    @Test fun corruptRecentIndexIsNeverOverwrittenAndRecoveryStillLoads() {
+        val uri = "content://example/recent/keep.txt"
+        val saved = RecoveryDraft(
+            id = DocumentIdentity.forUri(uri), sourceUri = uri,
+            displayName = "keep.txt", language = "PLAIN_TEXT",
+            content = "never delete", sourceEncoding = "UTF8",
+            sourceSha256 = "b".repeat(64), savedToDisk = true
+        )
+        store.save(saved).getOrThrow()
+        val index = File(dir, "v2/recent-shortcuts-hidden.index")
+        index.writeText("damaged sidecar")
+        assertTrue(store.hideFromRecent(saved.id, 1).isFailure)
+        assertTrue(store.showInRecent(saved.id).isFailure)
+        val listing = store.list()
+        assertTrue(listing.unreadableFiles.contains("recent-shortcuts-hidden.index"))
+        assertEquals(saved, listing.drafts.single())
+        assertEquals("damaged sidecar", index.readText())
     }
 
     @Test fun sameExistingFileGetsSameIdentity() {

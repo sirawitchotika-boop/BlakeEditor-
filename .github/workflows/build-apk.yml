@@ -50,6 +50,30 @@ jobs:
       - name: Check Web Editor input and caret regression
         run: node app/src/test/js/editor-host-input-regression.test.cjs
 
+      - name: Check V2 Entry theme regression
+        run: |
+          # The V2 button row must follow the chosen theme, not stay black
+          # when Original is using a light/Eye Care palette.
+          grep -Fq 'android:id="@+id/v2EntryBar"' app/src/main/res/layout/activity_main.xml
+          grep -Fq 'v2EntryBar = findViewById(R.id.v2EntryBar)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
+          grep -Fq 'v2EntryBar.setBackgroundColor(palette.surfaceColor)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
+
+      - name: Check V2 Beta Button Tap Target
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("app/src/main/res/layout/activity_main.xml").getroot()
+          a = "{http://schemas.android.com/apk/res/android}"
+          row = next(el for el in root if el.get(a + "id") == "@+id/v2EntryBar")
+          button = next(el for el in row if el.get(a + "id") == "@+id/btnOpenV2")
+          assert button.get(a + "layout_width") == "match_parent"
+          assert int(button.get(a + "layout_height").removesuffix("dp")) >= 48
+          assert button.get(a + "layout_marginStart") == "8dp"
+          assert button.get(a + "layout_marginEnd") == "8dp"
+          assert button.get(a + "text") == "@string/action_open_v2"
+          print("V2 Beta button is full-width with a >=48dp tap target.")
+          PY
+
       - name: Run Unit Tests & Build Debug APK
         run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
 
@@ -78,10 +102,42 @@ jobs:
           "$AAPT" dump badging "$APK" | grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'"
           "$AAPT" dump xmltree "$APK" AndroidManifest.xml > release-manifest-tree.txt
           grep -F 'ExternalFileRouterActivity' release-manifest-tree.txt
-          if grep -Eq '(V2WorkspacePreviewActivity|InputLabActivity|com.blake.editor.ui.preview.LargeTextReaderActivity)' release-manifest-tree.txt; then
-            echo "ERROR: Debug-only V2 Activity was exposed in the release manifest"
+          # V2 is registered in release only for an explicit internal launch.
+          # Neither V2 nor Input Lab may become an exported/launcher entry.
+          grep -F 'V2WorkspacePreviewActivity' release-manifest-tree.txt
+          grep -F 'com.blake.editor.ui.preview.LargeTextReaderActivity' release-manifest-tree.txt
+          if grep -Eq '(InputLabActivity|V2WorkspaceDebugLauncher)' release-manifest-tree.txt; then
+            echo "ERROR: Debug-only launcher is in the release manifest"
             exit 1
           fi
+          "$AAPT" dump badging "$APK" > release-badging.txt
+          test "$(grep -c '^launchable-activity:' release-badging.txt)" -eq 1
+          # Check activity attributes in the compiled release manifest, not
+          # just in the source XML; both V2 entrypoints must be non-exported.
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path("release-manifest-tree.txt").read_text().splitlines()
+          targets = ("com.blake.editor.ui.preview.V2WorkspacePreviewActivity",
+                     "com.blake.editor.ui.preview.LargeTextReaderActivity")
+          for target in targets:
+              names = [i for i, line in enumerate(lines)
+                       if 'android:name' in line and f'"{target}"' in line]
+              assert len(names) == 1, (target, names)
+              i = names[0]
+              n = i
+              while n >= 0 and "E: activity " not in lines[n] and not lines[n].strip().startswith("E: activity ("):
+                  n -= 1
+              assert n >= 0, target
+              depth = len(lines[n]) - len(lines[n].lstrip())
+              end = next((k for k in range(n + 1, len(lines))
+                          if lines[k].lstrip().startswith("E: ") and
+                          len(lines[k]) - len(lines[k].lstrip()) <= depth),
+                         len(lines))
+              attrs = "\n".join(lines[n+1:end])
+              assert any("android:exported" in line and "0x0" in line
+                         for line in attrs.splitlines()), target
+              assert "android.intent.action.MAIN" not in attrs, target
+          PY
           "$AAPT" list "$APK" | grep -Fx 'assets/reader/index.html'
           "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.js'
           "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.css'

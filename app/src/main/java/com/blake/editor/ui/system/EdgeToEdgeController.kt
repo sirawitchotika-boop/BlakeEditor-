@@ -22,7 +22,7 @@ object EdgeToEdgeController {
             }
         }
 
-        val isLight = themeMode == ThemeMode.EYE_CARE
+        val isLight = themeMode == ThemeMode.EYE_CARE || themeMode == ThemeMode.LIGHT
 
         val statusBarStyle = if (isLight) {
             SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)

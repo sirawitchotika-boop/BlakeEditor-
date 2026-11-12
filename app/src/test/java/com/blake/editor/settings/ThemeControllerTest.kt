@@ -21,6 +21,23 @@ class ThemeControllerTest {
     }
 
     @Test
+    fun testLightAndFollowSystemModes() {
+        assertEquals(ThemeMode.LIGHT, ThemeMode.fromName("LIGHT"))
+        assertEquals(ThemeMode.FOLLOW_SYSTEM, ThemeMode.fromName("FOLLOW_SYSTEM"))
+        assertEquals(ThemeMode.DARK, ThemeMode.FOLLOW_SYSTEM.resolvedForSystem(true))
+        assertEquals(ThemeMode.LIGHT, ThemeMode.FOLLOW_SYSTEM.resolvedForSystem(false))
+        for (fixed in listOf(ThemeMode.DARK, ThemeMode.AMOLED,
+            ThemeMode.EYE_CARE, ThemeMode.LIGHT)) {
+            assertEquals(fixed, fixed.resolvedForSystem(true))
+            assertEquals(fixed, fixed.resolvedForSystem(false))
+        }
+        val light = ThemeController.getPalette(ThemeMode.LIGHT)
+        assertEquals(ThemeController.COLOR_LIGHT_BG, light.backgroundColor)
+        assertEquals(ThemeController.COLOR_LIGHT_TEXT_PRIMARY, light.primaryTextColor)
+        assertEquals("chrome", light.aceThemeName)
+    }
+
+    @Test
     fun testDarkPalette() {
         val palette = ThemeController.getPalette(ThemeMode.DARK)
         assertNotNull(palette)

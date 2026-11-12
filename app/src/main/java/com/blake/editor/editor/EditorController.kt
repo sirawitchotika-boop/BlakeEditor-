@@ -90,7 +90,8 @@ class EditorController(
             }
             is EditorCommand.SetTheme -> {
                 val themeName = when (command.themeMode) {
-                    ThemeMode.DARK -> "twilight"
+                    ThemeMode.DARK, ThemeMode.FOLLOW_SYSTEM -> "twilight"
+                    ThemeMode.LIGHT -> "chrome"
                     ThemeMode.AMOLED -> "twilight"
                     ThemeMode.EYE_CARE -> "chrome"
                 }
