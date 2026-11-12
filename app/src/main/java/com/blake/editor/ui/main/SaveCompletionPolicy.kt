@@ -20,3 +20,17 @@ internal object SaveCompletionPolicy {
         else -> SaveCompletionDecision.CURRENT
     }
 }
+
+/** Serializes all Original Save and Save As writes, including completion/cleanup. */
+internal class SerializedDocumentSaveGate {
+    private val mutex = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun <T> run(action: suspend () -> T): T {
+        mutex.lock()
+        try {
+            return action()
+        } finally {
+            mutex.unlock()
+        }
+    }
+}

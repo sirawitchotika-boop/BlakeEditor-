@@ -42,4 +42,39 @@ class SaveCompletionPolicyTest {
         assertEquals(SaveCompletionDecision.STALE,
             SaveCompletionPolicy.decide(original, original.copy(editRevision = 15), true))
     }
+
+    @Test fun overlappingSaveWritesAreSerialized() = kotlinx.coroutines.runBlocking {
+        val gate = SerializedDocumentSaveGate()
+        val firstEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseFirst = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val order = mutableListOf<String>()
+        val first = kotlinx.coroutines.launch {
+            gate.run {
+                order.add("first-start")
+                firstEntered.complete(Unit)
+                releaseFirst.await()
+                order.add("first-end")
+            }
+        }
+        firstEntered.await()
+        val second = kotlinx.coroutines.launch {
+            gate.run { order.add("second") }
+        }
+        kotlinx.coroutines.yield()
+        assertEquals(listOf("first-start"), order)
+        releaseFirst.complete(Unit)
+        first.join()
+        second.join()
+        assertEquals(listOf("first-start", "first-end", "second"), order)
+    }
+
+    @Test fun failedWriteDoesNotKeepSaveGateLocked() = kotlinx.coroutines.runBlocking {
+        val gate = SerializedDocumentSaveGate()
+        try {
+            gate.run<Unit> { error("simulated failure") }
+        } catch (_: IllegalStateException) {
+            // Expected. Finally must release the mutex for the next Save.
+        }
+        assertEquals(42, gate.run { 42 })
+    }
 }

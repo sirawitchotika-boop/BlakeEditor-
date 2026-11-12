@@ -38,6 +38,7 @@ class MainViewModel(
     private var sessionSaveJob: Job? = null
     private var activeDocumentOpen: Job? = null
     private val draftMutationMutex = Mutex()
+    private val documentSaveGate = SerializedDocumentSaveGate()
     private var editRevision: Long = 0L
 
     /** Consume the one-shot event before showing the reader prompt. */
@@ -377,9 +378,16 @@ class MainViewModel(
         val contentToSave = state.content
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Saving file...") }
-            documentRepository.write(uri, contentToSave)
-                .onSuccess {
+            documentSaveGate.run {
+                // Skip queued Save snapshots when newer edits or a new document already exist.
+                if (!sameSnapshot(snapshot)) {
+                    reportUnfinishedSave(snapshot, SaveFinish.STALE)
+                    onComplete?.invoke(false)
+                    return@run
+                }
+                _uiState.update { it.copy(isLoading = true, statusMessage = "Saving file...") }
+                documentRepository.write(uri, contentToSave)
+                    .onSuccess {
                     val finish = completeSuccessfulWrite(snapshot, uri) {
                         it.copy(
                             isDirty = false,
@@ -402,7 +410,8 @@ class MainViewModel(
                         }
                     }
                     onComplete?.invoke(false)
-                }
+                    }
+            }
         }
     }
 
@@ -413,9 +422,15 @@ class MainViewModel(
         val contentToSave = state.content
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Saving to new file...") }
-            documentRepository.write(newUri, contentToSave)
-                .onSuccess {
+            documentSaveGate.run {
+                // Do not write an obsolete snapshot after another Save finished.
+                if (!sameSnapshot(snapshot)) {
+                    reportUnfinishedSave(snapshot, SaveFinish.STALE)
+                    return@run
+                }
+                _uiState.update { it.copy(isLoading = true, statusMessage = "Saving to new file...") }
+                documentRepository.write(newUri, contentToSave)
+                    .onSuccess {
                     // Metadata lookup may suspend too; check the stamp afterward.
                     val metadata = documentRepository.getMetadata(newUri).getOrNull()
                     val name = metadata?.displayName ?: "saved_file.txt"
@@ -444,6 +459,7 @@ class MainViewModel(
                         }
                     }
                 }
+            }
         }
     }
 
