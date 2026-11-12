@@ -366,6 +366,18 @@ class MainViewModel(
         updateSession()
     }
 
+    private fun reportFailedWrite(snapshot: SaveStateSnapshot, message: String) {
+        // Newer edits in the *same* document still need the loading indicator reset.
+        _uiState.update { current ->
+            if (current.documentGeneration == snapshot.documentGeneration &&
+                current.currentUri?.toString() == snapshot.uriKey) {
+                current.copy(isLoading = false, statusMessage = message)
+            } else {
+                current // Never disturb a different document that replaced this one.
+            }
+        }
+    }
+
     fun saveDocument(onComplete: ((Boolean) -> Unit)? = null) {
         val state = _uiState.value
         val uri = state.currentUri
@@ -379,38 +391,36 @@ class MainViewModel(
 
         viewModelScope.launch {
             documentSaveGate.run {
-                // Skip queued Save snapshots when newer edits or a new document already exist.
+                // Never write an obsolete Save queued behind a newer operation.
                 if (!sameSnapshot(snapshot)) {
                     reportUnfinishedSave(snapshot, SaveFinish.STALE)
                     onComplete?.invoke(false)
                     return@run
                 }
+
                 _uiState.update { it.copy(isLoading = true, statusMessage = "Saving file...") }
                 documentRepository.write(uri, contentToSave)
                     .onSuccess {
-                    val finish = completeSuccessfulWrite(snapshot, uri) {
-                        it.copy(
-                            isDirty = false,
-                            isLoading = false,
-                            statusMessage = "Saved: ${it.fileName}"
-                        )
-                    }
-                    if (finish == SaveFinish.CURRENT) {
-                        updateSession()
-                        onComplete?.invoke(true)
-                    } else {
-                        reportUnfinishedSave(snapshot, finish)
-                        onComplete?.invoke(false)
-                    }
-                }
-                .onFailure { error ->
-                    if (sameSnapshot(snapshot)) {
-                        _uiState.update {
-                            it.copy(isLoading = false, statusMessage = "Error saving file: ${error.message}")
+                        val finish = completeSuccessfulWrite(snapshot, uri) {
+                            it.copy(
+                                isDirty = false,
+                                isLoading = false,
+                                statusMessage = "Saved: ${it.fileName}"
+                            )
+                        }
+                        if (finish == SaveFinish.CURRENT) {
+                            updateSession()
+                            onComplete?.invoke(true)
+                        } else {
+                            reportUnfinishedSave(snapshot, finish)
+                            onComplete?.invoke(false)
                         }
                     }
-                    onComplete?.invoke(false)
+                    .onFailure { error ->
+                        reportFailedWrite(snapshot, "Error saving file: ${error.message}")
+                        onComplete?.invoke(false)
                     }
+                Unit
             }
         }
     }
@@ -423,42 +433,39 @@ class MainViewModel(
 
         viewModelScope.launch {
             documentSaveGate.run {
-                // Do not write an obsolete snapshot after another Save finished.
+                // Save As also shares the same ordered write gate with Save.
                 if (!sameSnapshot(snapshot)) {
                     reportUnfinishedSave(snapshot, SaveFinish.STALE)
                     return@run
                 }
+
                 _uiState.update { it.copy(isLoading = true, statusMessage = "Saving to new file...") }
                 documentRepository.write(newUri, contentToSave)
                     .onSuccess {
-                    // Metadata lookup may suspend too; check the stamp afterward.
-                    val metadata = documentRepository.getMetadata(newUri).getOrNull()
-                    val name = metadata?.displayName ?: "saved_file.txt"
-                    val syntax = SyntaxResolver.resolve(name, metadata?.mimeType)
-                    val finish = completeSuccessfulWrite(snapshot, oldUri) {
-                        it.copy(
-                            currentUri = newUri,
-                            fileName = name,
-                            syntaxMode = syntax,
-                            isDirty = false,
-                            isLoading = false,
-                            statusMessage = "Saved As: $name"
-                        )
-                    }
-                    if (finish == SaveFinish.CURRENT) {
-                        updateSession()
-                    } else {
-                        // Keep Original's URI and unsaved recovery if edits arrived.
-                        reportUnfinishedSave(snapshot, finish)
-                    }
-                }
-                .onFailure { error ->
-                    if (sameSnapshot(snapshot)) {
-                        _uiState.update {
-                            it.copy(isLoading = false, statusMessage = "Error in Save As: ${error.message}")
+                        val metadata = documentRepository.getMetadata(newUri).getOrNull()
+                        val name = metadata?.displayName ?: "saved_file.txt"
+                        val syntax = SyntaxResolver.resolve(name, metadata?.mimeType)
+                        val finish = completeSuccessfulWrite(snapshot, oldUri) {
+                            it.copy(
+                                currentUri = newUri,
+                                fileName = name,
+                                syntaxMode = syntax,
+                                isDirty = false,
+                                isLoading = false,
+                                statusMessage = "Saved As: $name"
+                            )
+                        }
+                        if (finish == SaveFinish.CURRENT) {
+                            updateSession()
+                        } else {
+                            // Keep the existing URI and unsaved recovery when edits arrived.
+                            reportUnfinishedSave(snapshot, finish)
                         }
                     }
-                }
+                    .onFailure { error ->
+                        reportFailedWrite(snapshot, "Error in Save As: ${error.message}")
+                    }
+                Unit
             }
         }
     }
