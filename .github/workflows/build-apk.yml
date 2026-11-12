@@ -66,25 +66,13 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Download Ace Editor Assets
+      - name: Test pinned vendor asset integrity checks (offline)
         if: steps.scope.outputs.tier != 'docs'
-        run: |
-          set -e
-          mkdir -p app/src/main/assets/editor/vendor/ace
-          ACE_BASE="https://cdnjs.cloudflare.com/ajax/libs/ace/1.44.0"
-          for file in ace.js mode-text.js mode-markdown.js mode-kotlin.js mode-javascript.js mode-python.js mode-html.js mode-css.js mode-json.js mode-xml.js theme-twilight.js theme-chrome.js ext-searchbox.js; do
-            curl -fSL --retry 3 "$ACE_BASE/$file" -o "app/src/main/assets/editor/vendor/ace/$file"
-          done
+        run: python3 -m unittest discover -s scripts/tests -p 'test_verified_vendor_assets.py' -v
 
-      - name: Download Markdown Preview Assets
+      - name: Download and verify pinned vendor assets
         if: steps.scope.outputs.tier != 'docs'
-        run: |
-          set -e
-          mkdir -p app/src/main/assets/editor/vendor/marked app/src/main/assets/editor/vendor/dompurify
-          curl -fSL --retry 3 "https://cdn.jsdelivr.net/npm/marked@18.0.7/lib/marked.umd.js" \
-            -o "app/src/main/assets/editor/vendor/marked/marked.min.js"
-          curl -fSL --retry 3 "https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.15/purify.min.js" \
-            -o "app/src/main/assets/editor/vendor/dompurify/purify.min.js"
+        run: python3 scripts/verified_vendor_assets.py install --manifest "$RUNNER_TEMP/blake-vendor.sha256"
 
       - name: Ensure Gradle Wrapper
         if: steps.scope.outputs.tier != 'docs'
@@ -149,6 +137,15 @@ jobs:
       - name: Build Release Variant (not published)
         if: steps.scope.outputs.tier == 'full'
         run: ./gradlew assembleRelease --stacktrace
+
+      - name: Verify packaged vendor hashes match pinned packages
+        if: steps.scope.outputs.tier == 'full'
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)
+          test -n "$APK"
+          python3 scripts/verified_vendor_assets.py verify-apk \
+            --manifest "$RUNNER_TEMP/blake-vendor.sha256" --apk "$APK"
 
       - name: Verify Release Launcher and Reader Assets
         if: steps.scope.outputs.tier == 'full'
