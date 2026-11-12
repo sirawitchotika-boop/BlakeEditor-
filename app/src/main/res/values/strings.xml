@@ -15,4 +15,10 @@
     <string name="dialog_unsaved_message">You have unsaved changes. Do you want to discard them?</string>
     <string name="dialog_discard">Discard</string>
     <string name="dialog_cancel">Cancel</string>
+    <string name="action_open_v2">Open Blake 2.0 (Beta)</string>
+    <string name="v2_entry_busy">Finish the current file operation before opening Blake 2.0.</string>
+    <string name="v2_entry_unsaved_title">Open Blake 2.0 Beta?</string>
+    <string name="v2_entry_unsaved_message">Original has unsaved changes. Your current document stays open in Original, and V2 has separate drafts. Save important work before switching if you need a file copy.</string>
+    <string name="v2_entry_stay">Stay in Original</string>
+    <string name="v2_entry_open">Open Beta</string>
 </resources>

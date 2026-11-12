@@ -94,6 +94,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
     private var markdownSourceMode = false
     private var status: TextView? = null
     private var active: RecoveryDraft? = null
+    private var viewingTrash = false
     private var autosave: Job? = null
     private var highlightJob: Job? = null
     private var pendingTextChange = false
@@ -141,7 +142,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (active == null) {
-                    finish()
+                    if (viewingTrash) showHome() else finish()
                 } else if (ViewCompat.getRootWindowInsets(root)
                         ?.isVisible(WindowInsetsCompat.Type.ime()) == true
                 ) {
@@ -257,6 +258,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
     }
 
     private fun showHome() {
+        viewingTrash = false
         autosave?.cancel()
         highlightJob?.cancel()
         pendingTextChange = false
@@ -274,6 +276,16 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             "Open File" to { filePicker.launch(arrayOf("*/*")) },
             "Settings" to { showEditorSettings() }
         ))
+        // This selector is OUTSIDE the document ScrollView. Scrolling can never
+        // press Move, check a draft, or trigger any storage action.
+        root.addView(button("Select drafts for Trash") { chooseDraftsForTrash() },
+            LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        // Keep Trash navigation pinned ABOVE the ScrollView even when Recent
+        // Saved Files grows. It is never appended to the document list.
+        val trashNavigation = button("Trash · 0 stored drafts") { showTrash() }
+        root.addView(trashNavigation, LinearLayout.LayoutParams(-1, -2).apply {
+            bottomMargin = dp(8)
+        })
         status = label("Loading your documents...", 12f, MUTED)
         val scroll = ScrollView(this)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -281,32 +293,418 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         lifecycleScope.launch {
             val listing = withContext(Dispatchers.IO) { workspace.list() }
-            status?.text = "Documents: " + listing.drafts.size + " · Stored locally"
+            val sections = V2HomeSections.from(listing)
+            val unfinished = sections.continueWriting
+            val saved = sections.recentlySaved
+            status?.text = "Documents: " + (unfinished.size + saved.size) +
+                " · Trash: " + sections.trash.size + " · Stored locally"
+            trashNavigation.text = "Trash · " + sections.trash.size + " stored drafts"
             if (listing.unreadableFiles.isNotEmpty()) {
                 status?.append(" · " + listing.unreadableFiles.size + " unreadable, kept safely")
             }
-            if (listing.drafts.isEmpty()) {
-                list.addView(text("No drafts yet. Tap New File.", 15f, MUTED))
-            } else {
-                val sections = V2HomeSections.from(listing)
-                val unfinished = sections.continueWriting
-                val saved = sections.recentlySaved
-                if (unfinished.isNotEmpty()) list.addView(text("Continue Writing", 17f, FG))
-                unfinished.forEach { draft ->
-                    list.addView(button(draft.displayName + " · " + draft.language +
-                        "\nRecovery draft · " + draft.content.length + " characters") {
-                        loadDraft(draft.id)
-                    })
+            if (unfinished.isEmpty() && saved.isEmpty()) {
+                list.addView(text("No active drafts yet. Tap New File.", 15f, MUTED))
+            }
+            if (unfinished.isNotEmpty()) {
+                list.addView(text("Continue Writing", 17f, FG))
+            }
+            unfinished.forEach { draft ->
+                val row = LinearLayout(this@V2WorkspacePreviewActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
                 }
-                if (saved.isNotEmpty()) list.addView(text("Recent Saved Files", 17f, FG))
-                saved.forEach { draft ->
-                    list.addView(button(draft.displayName + " · " + draft.language +
-                        "\nSaved file · " + draft.content.length + " characters") {
-                        loadDraft(draft.id)
-                    })
-                }
+                row.addView(button(draft.displayName + " · " + draft.language +
+                    "\nRecovery draft · " + draft.content.length + " characters") {
+                    loadDraft(draft.id)
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                })
+                row.addView(button("Rename") { renameDraft(draft) }.apply {
+                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+                        marginStart = dp(6)
+                    }
+                })
+                list.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
+                    bottomMargin = dp(8)
+                })
+            }
+            if (saved.isNotEmpty()) {
+                list.addView(text("Recent Saved Files", 17f, FG))
+                list.addView(button("Select recent files to remove") {
+                    chooseRecentToRemove()
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                        bottomMargin = dp(8)
+                    }
+                })
+            }
+            saved.forEach { draft ->
+                list.addView(button(draft.displayName + " · " + draft.language +
+                    "\nSaved file · " + draft.content.length + " characters") {
+                    loadDraft(draft.id)
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                        bottomMargin = dp(8)
+                    }
+                })
             }
         }
+    }
+
+    /** Pick saved-file shortcuts without removing a draft or changing file bytes. */
+    private fun chooseRecentToRemove() {
+        if (busy || active != null || viewingTrash) return
+        busy = true
+        lifecycleScope.launch {
+            val listing = withContext(Dispatchers.IO) { workspace.list() }
+            busy = false
+            if (viewingTrash || active != null) return@launch
+            if (listing.unreadableFiles.isNotEmpty()) {
+                dialog("Some recovery records are unreadable",
+                    "Those records were not deleted. Only readable shortcuts can be selected.")
+            }
+            val recent = V2HomeSections.from(listing).recentlySaved
+            if (recent.isEmpty()) {
+                dialog("Recent is empty", "There are no saved-file shortcuts to remove.")
+                return@launch
+            }
+            val checked = BooleanArray(recent.size)
+            AlertDialog.Builder(this@V2WorkspacePreviewActivity)
+                .setTitle("Select Recent shortcuts")
+                .setMultiChoiceItems(recent.map { draftChoiceLabel(it) }.toTypedArray(),
+                    checked) { _, index, isChecked ->
+                    checked[index] = isChecked
+                }
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Review selected") { _, _ ->
+                    val selected = recent.filterIndexed { index, _ -> checked[index] }
+                    if (selected.isEmpty()) {
+                        dialog("Nothing selected", "Choose one or more saved files first.")
+                    } else {
+                        confirmRemoveFromRecent(selected)
+                    }
+                }
+                .show()
+        }
+    }
+
+    private fun confirmRemoveFromRecent(recent: List<RecoveryDraft>) {
+        if (busy || active != null || viewingTrash || recent.isEmpty()) return
+        val preview = recent.take(5).joinToString("\n") { "• " + draftChoiceLabel(it) }
+        val extra = if (recent.size > 5) "\nAnd " + (recent.size - 5) + " more" else ""
+        AlertDialog.Builder(this)
+            .setTitle("Remove " + recent.size + " from Recent?")
+            .setMessage(preview + extra +
+                "\n\nOnly Home shortcuts will be hidden. No real files, recovery " +
+                "records, text or saved data will be deleted. Reopening a file " +
+                "through Open File can show it in Recent again.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove shortcuts") { _, _ ->
+                if (busy || active != null || viewingTrash) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    val outcome = withContext(Dispatchers.IO) {
+                        var hidden = 0
+                        val failed = mutableListOf<String>()
+                        recent.forEach { entry ->
+                            val result = workspace.removeFromRecent(entry.id, entry.revision)
+                            if (result.isSuccess) hidden++ else failed.add(entry.displayName)
+                        }
+                        Pair(hidden, failed)
+                    }
+                    busy = false
+                    showHome()
+                    if (outcome.second.isNotEmpty()) {
+                        dialog("Some shortcuts were kept",
+                            outcome.first.toString() + " removed, " +
+                                outcome.second.size + " still visible.\n" +
+                                outcome.second.take(4).joinToString(", "))
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun showTrash() {
+        if (busy || active != null) return
+        viewingTrash = true
+        root.removeAllViews()
+        PreviewSystemBars.update(this, root, BG)
+        label("Trash", 22f, FG)
+        label("Restore is available. Permanent deletion needs confirmation.", 12f, MUTED)
+        controls(listOf(
+            "Back to Home" to { showHome() },
+            "Select to Delete" to { chooseTrashedForDeletion() },
+            "Empty Trash" to { confirmEmptyTrash() }
+        ))
+        status = label("Loading Trash...", 12f, MUTED)
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll.addView(list)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        lifecycleScope.launch {
+            val listing = withContext(Dispatchers.IO) { workspace.list() }
+            if (!viewingTrash) return@launch
+            val trashed = V2HomeSections.from(listing).trash
+            status?.text = "Trash: " + trashed.size + " · Stored locally"
+            if (listing.unreadableFiles.isNotEmpty()) {
+                status?.append(" · Unreadable recovery records kept safely")
+            }
+            if (trashed.isEmpty()) {
+                list.addView(text("Trash is empty.", 15f, MUTED))
+            }
+            trashed.forEach { draft ->
+                val row = LinearLayout(this@V2WorkspacePreviewActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                row.addView(text(draft.displayName + " · " + draft.language +
+                    "\nRecovery kept · " + draft.content.length + " characters", 15f, FG),
+                    LinearLayout.LayoutParams(0, -2, 1f))
+                row.addView(button("Restore") { restoreTrashedDraft(draft) },
+                    LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
+                list.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
+                    bottomMargin = dp(8)
+                })
+            }
+        }
+    }
+
+    /** Short, stable identifier distinguishes duplicate custom names before bulk actions. */
+    private fun draftChoiceLabel(draft: RecoveryDraft): String =
+        draft.displayName + " · " + draft.content.length + " chars · #" +
+            draft.id.value.takeLast(6)
+
+    /**
+     * Selection happens inside Android's multi-choice dialog. Nothing can move
+     * from a scroll gesture; only the separately confirmed button changes data.
+     */
+    private fun chooseDraftsForTrash() {
+        if (busy || active != null || viewingTrash) return
+        busy = true
+        lifecycleScope.launch {
+            val listing = withContext(Dispatchers.IO) { workspace.list() }
+            busy = false
+            if (viewingTrash || active != null) return@launch
+            if (listing.unreadableFiles.isNotEmpty()) {
+                dialog("Unreadable recovery records",
+                    "Unreadable drafts were kept. They cannot be selected.")
+            }
+            val drafts = V2HomeSections.from(listing).continueWriting
+            if (drafts.isEmpty()) {
+                dialog("No drafts to move", "Continue Writing has no unfinished drafts.")
+                return@launch
+            }
+            val checked = BooleanArray(drafts.size)
+            AlertDialog.Builder(this@V2WorkspacePreviewActivity)
+                .setTitle("Select drafts to move")
+                .setMultiChoiceItems(drafts.map { draftChoiceLabel(it) }.toTypedArray(), checked) { _, index, isChecked ->
+                    checked[index] = isChecked
+                }
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Review selected") { _, _ ->
+                    val selected = drafts.filterIndexed { index, _ -> checked[index] }
+                    if (selected.isEmpty()) {
+                        dialog("Nothing selected", "Check one or more drafts first.")
+                    } else {
+                        confirmSelectedToTrash(selected)
+                    }
+                }
+                .show()
+        }
+    }
+
+    private fun confirmSelectedToTrash(drafts: List<RecoveryDraft>) {
+        if (busy || active != null || viewingTrash || drafts.isEmpty()) return
+        val preview = drafts.take(5).joinToString("\n") { "• " + draftChoiceLabel(it) }
+        val more = if (drafts.size > 5) "\nAnd " + (drafts.size - 5) + " more" else ""
+        AlertDialog.Builder(this)
+            .setTitle("Move " + drafts.size + " drafts to Trash?")
+            .setMessage(preview + more + "\n\nRecovery contents will stay on the phone. " +
+                "No real file will change.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Move selected to Trash") { _, _ ->
+                if (busy || active != null || viewingTrash) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    // Each record is synced atomically. A failed item stays on Home,
+                    // while successful items are still recoverable in Trash.
+                    val result = withContext(Dispatchers.IO) {
+                        var moved = 0
+                        val failed = mutableListOf<String>()
+                        drafts.forEach { draft ->
+                            val saved = workspace.moveToTrash(draft.id, draft.revision)
+                            if (saved.isSuccess) moved++ else failed.add(draft.displayName)
+                        }
+                        Pair(moved, failed)
+                    }
+                    busy = false
+                    showHome()
+                    if (result.second.isNotEmpty()) {
+                        dialog("Some drafts were not moved",
+                            result.first.toString() + " moved, " +
+                                result.second.size + " kept on Home.\n" +
+                                result.second.take(4).joinToString(", "))
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun restoreTrashedDraft(draft: RecoveryDraft) {
+        if (busy || active != null || !viewingTrash) return
+        busy = true
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                // A missing/unreadable/changed linked source always becomes a
+                // separate recovered draft, never a blind overwrite.
+                val matches = runCatching {
+                    val uri = draft.sourceUri ?: return@runCatching false
+                    val fingerprint = draft.sourceSha256 ?: return@runCatching false
+                    VerifiedDocumentSaver.fingerprint(
+                        readSmallFile(Uri.parse(uri))) == fingerprint
+                }.getOrDefault(false)
+                workspace.restoreFromTrash(draft.id, draft.revision, matches)
+            }
+            busy = false
+            result.onSuccess { restored ->
+                showTrash()
+                if (restored.recoveredAsCopy) {
+                    dialog("Recovered a separate copy",
+                        "A linked source could not be verified. A new unlinked draft " +
+                            "was created under Continue Writing. The original Trash " +
+                            "entry was retained. No real file was changed.")
+                } else {
+                    status?.text = "Restored " + restored.draft.displayName
+                }
+            }.onFailure {
+                dialog("Restore was not completed",
+                    it.message.orEmpty() + "\nYour Trash recovery record was kept.")
+            }
+        }
+    }
+
+    private fun chooseTrashedForDeletion() {
+        if (busy || active != null || !viewingTrash) return
+        busy = true
+        lifecycleScope.launch {
+            val listing = withContext(Dispatchers.IO) { workspace.list() }
+            busy = false
+            if (!viewingTrash || active != null) return@launch
+            val drafts = V2HomeSections.from(listing).trash
+            if (drafts.isEmpty()) {
+                dialog("Trash is empty", "There are no Trash entries to delete.")
+                return@launch
+            }
+            val checked = BooleanArray(drafts.size)
+            AlertDialog.Builder(this@V2WorkspacePreviewActivity)
+                .setTitle("Select Trash entries to delete")
+                .setMultiChoiceItems(drafts.map { draftChoiceLabel(it) }.toTypedArray(), checked) { _, index, isChecked ->
+                    checked[index] = isChecked
+                }
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Review deletion") { _, _ ->
+                    val selected = drafts.filterIndexed { index, _ -> checked[index] }
+                    if (selected.isEmpty()) {
+                        dialog("Nothing selected", "Check entries to delete first.")
+                    } else {
+                        confirmPermanentDeletion(selected)
+                    }
+                }
+                .show()
+        }
+    }
+
+    private fun confirmEmptyTrash() {
+        if (busy || active != null || !viewingTrash) return
+        busy = true
+        lifecycleScope.launch {
+            val listing = withContext(Dispatchers.IO) { workspace.list() }
+            busy = false
+            if (!viewingTrash || active != null) return@launch
+            val drafts = V2HomeSections.from(listing).trash
+            if (drafts.isEmpty()) {
+                dialog("Trash is empty", "There is nothing to delete.")
+                return@launch
+            }
+            AlertDialog.Builder(this@V2WorkspacePreviewActivity)
+                .setTitle("Empty all Trash?")
+                .setMessage("Review permanent deletion of " + drafts.size +
+                    " recovery records? Nothing has been deleted yet.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Review deletion") { _, _ ->
+                    confirmPermanentDeletion(drafts)
+                }
+                .show()
+        }
+    }
+
+    private fun confirmPermanentDeletion(drafts: List<RecoveryDraft>) {
+        if (busy || active != null || !viewingTrash || drafts.isEmpty()) return
+        val names = drafts.take(5).joinToString("\n") { "• " + draftChoiceLabel(it) }
+        val more = if (drafts.size > 5) "\nAnd " + (drafts.size - 5) + " more" else ""
+        AlertDialog.Builder(this)
+            .setTitle("Delete " + drafts.size + " permanently?")
+            .setMessage(names + more + "\n\nThis permanently removes only the " +
+                "selected private recovery records. This cannot be undone. " +
+                "Real files and other drafts are never deleted.")
+            .setNegativeButton("Keep in Trash", null)
+            .setPositiveButton("Delete Permanently") { _, _ ->
+                if (busy || active != null || !viewingTrash) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        var removed = 0
+                        val failed = mutableListOf<String>()
+                        drafts.forEach { draft ->
+                            val action = workspace.deleteTrashedPermanently(
+                                draft.id, draft.revision)
+                            if (action.isSuccess) removed++ else failed.add(draft.displayName)
+                        }
+                        Pair(removed, failed)
+                    }
+                    busy = false
+                    showTrash()
+                    if (result.second.isNotEmpty()) {
+                        dialog("Some entries were kept",
+                            result.first.toString() + " deleted, " +
+                                result.second.size + " kept in Trash.\n" +
+                                result.second.take(4).joinToString(", "))
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun renameDraft(draft: RecoveryDraft) {
+        if (busy || active != null) return
+        val nameField = EditText(this).apply {
+            setSingleLine(true)
+            setText(draft.displayName)
+            selectAll()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rename Draft")
+            .setMessage("Changes the draft name only. It does not rename or save a real file.")
+            .setView(nameField)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Rename") { _, _ ->
+                if (busy || active != null) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        workspace.renameDraft(draft.id, draft.revision,
+                            nameField.text?.toString().orEmpty())
+                    }
+                    busy = false
+                    result.onSuccess { showHome() }
+                        .onFailure {
+                            dialog("Could not rename draft", it.message.orEmpty() +
+                                "\nYour existing draft was kept unchanged.")
+                        }
+                }
+            }
+            .show()
     }
 
     private fun newFile() {
@@ -829,11 +1227,12 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
             dialog("Unreadable drafts",
                 "Some recovery records could not be opened. They were not deleted.")
         }
+        val visible = entries.drafts.filter { it.trashedAtMs == null }
         AlertDialog.Builder(this@V2WorkspacePreviewActivity)
             .setTitle("Quick Document Switcher")
-            .setItems(entries.drafts.map { it.displayName + " · " + it.content.length + " chars" }
+            .setItems(visible.map { it.displayName + " · " + it.content.length + " chars" }
                 .toTypedArray()) { _, index ->
-                loadDraft(entries.drafts[index].id)
+                loadDraft(visible[index].id)
             }
             .setNeutralButton("New File") { _, _ -> afterStored { createAfterSwitch() } }
             .setNegativeButton("Cancel", null)

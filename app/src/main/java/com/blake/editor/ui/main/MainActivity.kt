@@ -2,6 +2,7 @@ package com.blake.editor.ui.main
 
 import android.content.Intent
 import android.content.ClipData
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -37,7 +38,9 @@ import com.blake.editor.editor.EditorEvent
 import com.blake.editor.editor.v2.CodeSyntaxScanner
 import com.blake.editor.intent.IncomingIntentParser
 import com.blake.editor.settings.ThemeController
+import com.blake.editor.settings.SharedEditorTheme
 import com.blake.editor.ui.system.EdgeToEdgeController
+import com.blake.editor.ui.preview.V2WorkspacePreviewActivity
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rootContainer: View
     private lateinit var topBar: View
     private lateinit var fileBar: View
+    private lateinit var v2EntryBar: View
     private lateinit var tvFileName: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvEditorInfo: TextView
@@ -90,6 +94,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnRedo: Button
     private lateinit var btnTheme: Button
     private lateinit var btnPreview: Button
+    private lateinit var btnOpenV2: Button
 
     private var lastAppliedTheme: ThemeMode? = null
     private var lastSyntaxMode: SyntaxMode? = null
@@ -104,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         rootContainer = findViewById(R.id.rootContainer)
         topBar = findViewById(R.id.topBar)
         fileBar = findViewById(R.id.fileBar)
+        v2EntryBar = findViewById(R.id.v2EntryBar)
         tvFileName = findViewById(R.id.tvFileName)
         tvStatus = findViewById(R.id.tvStatus)
         tvEditorInfo = findViewById(R.id.tvEditorInfo)
@@ -117,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         btnRedo = findViewById(R.id.btnRedo)
         btnTheme = findViewById(R.id.btnTheme)
         btnPreview = findViewById(R.id.btnPreview)
+        btnOpenV2 = findViewById(R.id.btnOpenV2)
 
         EdgeToEdgeController.setupWindowInsets(rootContainer)
         setupNativeEditor()
@@ -149,6 +156,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Theme selections in V2 are shared, and Original retains its
+        // existing DataStore for upgrades and previous settings.
+        SharedEditorTheme.read(this)?.let { theme ->
+            // The UI starts with a temporary default until DataStore loads.
+            // Always mirror the canonical choice: comparing only the initial
+            // UI state could let an older DataStore value override it later.
+            viewModel.setThemeMode(theme)
+        }
         if (::nativeEditor.isInitialized) {
             scheduleSyntaxHighlight(viewModel.uiState.value.syntaxMode, immediate = true)
         }
@@ -315,7 +330,7 @@ class MainActivity : AppCompatActivity() {
             if (!current.isPreviewing && current.syntaxMode == mode &&
                 nativeEditor.text?.toString() == snapshot) {
                 nativeEditor.applySyntaxTokens(tokens,
-                    NativeCodePresentation.colorsFor(current.themeMode))
+                    NativeCodePresentation.colorsFor(effectiveTheme(current.themeMode)))
             }
         }
     }
@@ -325,7 +340,7 @@ class MainActivity : AppCompatActivity() {
             when (event) {
                 is EditorEvent.EditorReady -> {
                     val state = viewModel.uiState.value
-                    editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                    editorController.execute(EditorCommand.SetTheme(effectiveTheme(state.themeMode)))
                     if (state.isPreviewing) {
                         editorController.execute(EditorCommand.ShowPreview(state.content))
                     }
@@ -384,6 +399,42 @@ class MainActivity : AppCompatActivity() {
         btnPreview.setOnClickListener {
             viewModel.togglePreview()
         }
+
+        btnOpenV2.setOnClickListener {
+            val current = viewModel.uiState.value
+            when (V2EntryPolicy.decide(current.isDirty, current.isLoading)) {
+                V2EntryDecision.BLOCK_BUSY -> {
+                    tvStatus.text = getString(R.string.v2_entry_busy)
+                }
+                V2EntryDecision.CONFIRM_UNSAVED -> {
+                    AlertDialog.Builder(this)
+                        .setTitle(R.string.v2_entry_unsaved_title)
+                        .setMessage(R.string.v2_entry_unsaved_message)
+                        .setNegativeButton(R.string.v2_entry_stay, null)
+                        .setPositiveButton(R.string.v2_entry_open) { _, _ ->
+                            // A file operation may have started while the
+                            // confirmation was visible. Recheck before leaving.
+                            if (viewModel.uiState.value.isLoading) {
+                                tvStatus.text = getString(R.string.v2_entry_busy)
+                            } else {
+                                openBlakeV2()
+                            }
+                        }
+                        .show()
+                }
+                V2EntryDecision.OPEN -> openBlakeV2()
+            }
+        }
+    }
+
+    private fun openBlakeV2() {
+        // First opt-in after upgrade: Original's current selection wins.
+        // After that, the last explicit change in either editor wins.
+        if (SharedEditorTheme.read(this) == null) {
+            SharedEditorTheme.remember(this, viewModel.uiState.value.themeMode)
+        }
+        // No document or draft is passed to V2.
+        startActivity(Intent(this, V2WorkspacePreviewActivity::class.java))
     }
 
     private fun showThemeSelectionDialog() {
@@ -394,7 +445,9 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(R.string.dialog_theme_title)
             .setSingleChoiceItems(themeNames, currentIndex) { dialog, which ->
-                viewModel.setThemeMode(themes[which])
+                val selected = themes[which]
+                SharedEditorTheme.remember(this, selected)
+                viewModel.setThemeMode(selected)
                 dialog.dismiss()
             }
             .setNegativeButton(R.string.dialog_cancel, null)
@@ -451,12 +504,12 @@ class MainActivity : AppCompatActivity() {
                     val modeChanged = state.syntaxMode != lastSyntaxMode
                     if (themeChanged) {
                         lastAppliedTheme = state.themeMode
-                        applyThemePalette(state.themeMode)
-                        editorController.execute(EditorCommand.SetTheme(state.themeMode))
+                        applyThemePalette(effectiveTheme(state.themeMode))
+                        editorController.execute(EditorCommand.SetTheme(effectiveTheme(state.themeMode)))
                     }
                     if (modeChanged || themeChanged) {
                         lastSyntaxMode = state.syntaxMode
-                        val palette = ThemeController.getPalette(state.themeMode)
+                        val palette = ThemeController.getPalette(effectiveTheme(state.themeMode))
                         nativeEditor.configureGutter(
                             NativeCodePresentation.showLineNumbers(state.syntaxMode),
                             palette.surfaceColor, palette.secondaryTextColor
@@ -493,6 +546,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun effectiveTheme(mode: ThemeMode): ThemeMode {
+        val dark = (resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        return mode.resolvedForSystem(dark)
+    }
+
     private fun applyThemePalette(themeMode: ThemeMode) {
         EdgeToEdgeController.applyEdgeToEdge(this, themeMode)
         val palette = ThemeController.getPalette(themeMode)
@@ -500,6 +559,7 @@ class MainActivity : AppCompatActivity() {
         rootContainer.setBackgroundColor(palette.surfaceColor)
         topBar.setBackgroundColor(palette.surfaceColor)
         fileBar.setBackgroundColor(palette.surfaceColor)
+        v2EntryBar.setBackgroundColor(palette.surfaceColor)
         tvStatus.setBackgroundColor(palette.surfaceColor)
         webViewEditor.setBackgroundColor(palette.backgroundColor)
         nativeEditor.setBackgroundColor(palette.backgroundColor)
@@ -509,7 +569,7 @@ class MainActivity : AppCompatActivity() {
         tvEditorInfo.setTextColor(palette.secondaryTextColor)
         tvStatus.setTextColor(palette.secondaryTextColor)
 
-        val buttons = listOf(btnNew, btnOpen, btnSave, btnSaveAs, btnUndo, btnRedo, btnTheme, btnPreview)
+        val buttons = listOf(btnNew, btnOpen, btnSave, btnSaveAs, btnUndo, btnRedo, btnTheme, btnPreview, btnOpenV2)
         for (btn in buttons) {
             btn.setBackgroundColor(palette.buttonBackgroundColor)
             btn.setTextColor(palette.buttonTextColor)

@@ -11,20 +11,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity
-            android:name=".ui.preview.V2WorkspacePreviewActivity"
+        <!-- Debug launcher alias only. Target Activity stays internal in the
+             regular app and its XML declaration lives in main. -->
+        <activity-alias
+            android:name=".ui.preview.V2WorkspaceDebugLauncher"
+            android:targetActivity=".ui.preview.V2WorkspacePreviewActivity"
             android:exported="true"
-            android:label="Blake 2.0 Preview"
-            android:theme="@style/Theme.BlakePreview">
+            android:label="Blake 2.0 Preview">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
-        <activity
-            android:name=".ui.preview.LargeTextReaderActivity"
-            android:exported="false"
-            android:label="Large Text Reader"
-            android:theme="@style/Theme.BlakePreview" />
+        </activity-alias>
     </application>
 </manifest>

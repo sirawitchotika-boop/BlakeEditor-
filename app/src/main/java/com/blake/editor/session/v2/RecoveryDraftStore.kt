@@ -33,7 +33,8 @@ data class RecoveryDraft(
     val sourceEncoding: String? = null,
     val sourceHadBom: Boolean = false,
     val sourceSha256: String? = null,
-    val savedToDisk: Boolean = false
+    val savedToDisk: Boolean = false,
+    val trashedAtMs: Long? = null
 ) {
     init {
         require(displayName.isNotBlank()) { "Display name must not be blank" }
@@ -46,6 +47,7 @@ data class RecoveryDraft(
         require(sourceEncoding == null || sourceEncoding in setOf(
             "UTF8", "UTF16_LE", "UTF16_BE", "WINDOWS_874", "TIS_620"
         )) { "Unsupported recorded encoding" }
+        require(trashedAtMs == null || trashedAtMs >= 0L) { "Invalid Trash timestamp" }
         if (savedToDisk) require(sourceUri != null && sourceSha256 != null && sourceEncoding != null) {
             "Saved document must have verified file metadata"
         }
@@ -59,7 +61,16 @@ data class RecoveryDraft(
 
 data class RecoveryListing(
     val drafts: List<RecoveryDraft>,
-    val unreadableFiles: List<String>
+    val unreadableFiles: List<String>,
+    // Separate private shortcut metadata. Never used to decide whether a
+    // recovery record should be deleted, overwritten, or opened.
+    val hiddenRecentIds: Set<DocumentIdentity> = emptySet()
+)
+
+/** A changed or unverifiable linked source is restored as a separate, unlinked copy. */
+data class DraftRestoreResult(
+    val draft: RecoveryDraft,
+    val recoveredAsCopy: Boolean
 )
 
 data class LegacyMigrationReport(
@@ -72,23 +83,33 @@ data class LegacyMigrationReport(
 class RecoveryDraftStore(private val directory: File) {
     private companion object {
         const val MAGIC = 0x424C4B32 // BLK2
-        const val FORMAT_VERSION = 2
+        const val FORMAT_VERSION = 3
         const val MAX_METADATA_BYTES = 8192
         const val MAX_CONTENT_BYTES = 32 * 1024 * 1024
         const val MAX_FILE_BYTES = MAX_CONTENT_BYTES + MAX_METADATA_BYTES * 4
         const val EXTENSION = ".recovery"
         const val LEGACY_MARKER = "legacy-imported.marker"
+        const val UNTITLED_COUNTER = "next-untitled-number.counter"
+        const val HIDDEN_RECENT_INDEX = "recent-shortcuts-hidden.index"
+        const val HIDDEN_RECENT_HEADER = "BLK-RECENT-HIDDEN-V1\n"
+        const val MAX_HIDDEN_RECENT_BYTES = 1024 * 1024
+        val numberedUntitled = Regex("Untitled ([1-9][0-9]*)")
+        // Serializes reservations across store instances within the app process.
+        val recoveryMutationLock = Any()
     }
 
-    @Synchronized
-    fun save(draft: RecoveryDraft): Result<Unit> = runCatching {
+    /** Serializes recovery mutations across all store instances in this app process. */
+    private inline fun <T> mutate(block: () -> T): Result<T> =
+        synchronized(recoveryMutationLock) { runCatching(block) }
+
+    fun save(draft: RecoveryDraft): Result<Unit> = mutate {
         val old = readDraftFile(draft.id)
         if (old != null) {
             require(draft.revision >= old.revision) { "Stale draft revision" }
             require(draft.sourceUri == old.sourceUri) { "Document source changed" }
             if (draft.revision == old.revision) {
                 require(draft == old) { "Conflicting draft revision" }
-                return@runCatching
+                return@mutate
             }
         }
         atomicWrite(fileFor(draft.id), serialize(draft))
@@ -112,21 +133,261 @@ class RecoveryDraftStore(private val directory: File) {
                 }.onSuccess { drafts.add(it) }
                     .onFailure { unreadable.add(file.name) }
             }
+        val hidden = runCatching { readHiddenRecentIds() }
+            .onFailure { unreadable.add(HIDDEN_RECENT_INDEX) }
+            .getOrDefault(emptySet())
         return RecoveryListing(
             drafts.sortedByDescending { it.updatedAtMs },
-            unreadable.sorted()
+            unreadable.sorted(),
+            hidden
         )
+    }
+
+    /**
+     * Remove only a Home shortcut. This operation never writes a recovery
+     * record or calls any Android file writer. The record stays openable and
+     * is still available in recovery even after an app restart.
+     */
+    fun hideFromRecent(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = mutate {
+        val record = readDraftFile(id) ?: error("Saved-file shortcut is missing")
+        check(record.trashedAtMs == null && record.savedToDisk) {
+            "Only clean saved-file shortcuts can be removed from Recent"
+        }
+        check(record.revision == expectedRevision) {
+            "The file record changed. Refresh Home and try again."
+        }
+        val hidden = readHiddenRecentIds()
+        if (id !in hidden) writeHiddenRecentIds(hidden + id)
+    }
+
+    /**
+     * Explicitly reopening the same file may show it in Recent again.
+     * Failure to update this shortcut index cannot damage any recovery text.
+     */
+    fun showInRecent(id: DocumentIdentity): Result<Unit> = mutate {
+        val hidden = readHiddenRecentIds()
+        if (id in hidden) writeHiddenRecentIds(hidden - id)
+    }
+
+    private fun readHiddenRecentIds(): Set<DocumentIdentity> {
+        val index = File(directory, HIDDEN_RECENT_INDEX)
+        if (!index.exists()) return emptySet()
+        require(index.isFile && index.length() <= MAX_HIDDEN_RECENT_BYTES) {
+            "Recent shortcut index is invalid; original file records were retained"
+        }
+        val content = index.readText(Charsets.UTF_8)
+        require(content.startsWith(HIDDEN_RECENT_HEADER)) {
+            "Recent shortcut index has an invalid header"
+        }
+        val payload = content.removePrefix(HIDDEN_RECENT_HEADER)
+        if (payload.isEmpty()) return emptySet()
+        require(payload.endsWith("\n")) { "Recent shortcut index is incomplete" }
+        val rawIds = payload.dropLast(1).split("\n")
+        require(rawIds.none { it.isEmpty() }) { "Recent shortcut index has an empty ID" }
+        val ids = rawIds.map { DocumentIdentity.fromStored(it) }
+        require(ids.size == ids.toSet().size) { "Recent shortcut index has duplicate IDs" }
+        return ids.toSet()
+    }
+
+    private fun writeHiddenRecentIds(hidden: Set<DocumentIdentity>) {
+        val text = HIDDEN_RECENT_HEADER +
+            hidden.map { it.value }.sorted().joinToString(separator = "\n", postfix =
+                if (hidden.isEmpty()) "" else "\n")
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        require(bytes.size <= MAX_HIDDEN_RECENT_BYTES) {
+            "Recent shortcut index is full; no records were changed"
+        }
+        atomicWrite(File(directory, HIDDEN_RECENT_INDEX), bytes)
+    }
+
+    /**
+     * Reserve a number before writing a new draft. A failed draft write may skip
+     * a number, but must never make it available to a later draft.
+     *
+     * Existing installs may have numbered records but no counter yet. Initialize
+     * above their highest recorded name, and fail closed if any recovery file
+     * cannot be checked. Never reconstruct an existing corrupt counter.
+     */
+    fun reserveUntitledNumber(): Result<Long> = runCatching {
+        synchronized(recoveryMutationLock) {
+            val counter = File(directory, UNTITLED_COUNTER)
+            val next = if (counter.exists()) {
+                require(counter.isFile && counter.length() in 1L..20L) {
+                    "Untitled counter is invalid; existing draft data was not changed"
+                }
+                val value = counter.readText(Charsets.US_ASCII)
+                require(Regex("[1-9][0-9]*").matches(value)) {
+                    "Untitled counter is invalid; existing draft data was not changed"
+                }
+                value.toLongOrNull() ?: error("Untitled counter is out of range")
+            } else {
+                val listing = list()
+                // The optional Recent shortcut index is not a recovery record.
+                // A damaged index must not prevent safe Untitled numbering.
+                check(listing.unreadableFiles.none { it != HIDDEN_RECENT_INDEX }) {
+                    "Cannot initialize Untitled numbering while recovery records are unreadable"
+                }
+                val highest = listing.drafts.mapNotNull { draft ->
+                    numberedUntitled.matchEntire(draft.displayName)
+                        ?.groupValues?.get(1)?.let { number ->
+                            number.toLongOrNull() ?: error("Existing Untitled number is out of range")
+                        }
+                }.maxOrNull() ?: 0L
+                check(highest < Long.MAX_VALUE) { "No more Untitled numbers are available" }
+                highest + 1L
+            }
+            check(next >= 1L && next < Long.MAX_VALUE) {
+                "No more Untitled numbers are available"
+            }
+            // The reservation is committed before creating the draft itself.
+            atomicWrite(counter, (next + 1L).toString().toByteArray(Charsets.US_ASCII))
+            next
+        }
+    }
+
+    /**
+     * Rename a draft's display label only. Never rename or write the backing
+     * Android file. Compare the Home row's revision with the latest stored
+     * snapshot so a stale rename cannot replace newer unsaved edits.
+     *
+     * This uses the same durable, atomic recovery write as text edits.
+     * Duplicate custom names are intentionally allowed; IDs are the identity.
+     */
+    fun renameDisplayName(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        enteredName: String
+    ): Result<RecoveryDraft> = mutate {
+        val name = enteredName.trim()
+        require(name.isNotEmpty()) { "Draft name cannot be empty" }
+        require(name.toByteArray(Charsets.UTF_8).size <= MAX_METADATA_BYTES) {
+            "Draft name is too long"
+        }
+        val current = readDraftFile(id) ?: error("Draft is missing; nothing was changed")
+        check(current.trashedAtMs == null) { "Draft is in Trash and cannot be renamed here" }
+        check(current.revision == expectedRevision) {
+            "Draft changed since Home opened. Reload Home and try again."
+        }
+        if (current.displayName == name) return@mutate current
+        check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
+        val updated = current.copy(
+            displayName = name,
+            revision = current.revision + 1L,
+            updatedAtMs = maxOf(current.updatedAtMs, System.currentTimeMillis())
+        )
+        save(updated).getOrThrow()
+        updated
+    }
+
+    /**
+     * Atomically mark an unsaved draft as Trash without removing its recovery
+     * file. The full content, cursor, scroll, source URI and encoding metadata
+     * stay together in one complete snapshot.
+     *
+     * Home actions pass the revision that was displayed. A newer edit or
+     * another operation must win rather than being silently hidden.
+     */
+    fun moveToTrash(id: DocumentIdentity, expectedRevision: Long): Result<RecoveryDraft> =
+        mutate {
+            val current = readDraftFile(id) ?: error("Draft is missing; nothing was moved")
+            check(current.revision == expectedRevision) {
+                "Draft changed since Home opened. Reload Home before moving it."
+            }
+            check(current.trashedAtMs == null) { "Draft is already in Trash" }
+            check(!current.savedToDisk) {
+                "Saved files belong in Recent Files, not draft Trash"
+            }
+            check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
+            val now = System.currentTimeMillis().coerceAtLeast(0L)
+            val moved = current.copy(
+                trashedAtMs = now,
+                revision = current.revision + 1L,
+                updatedAtMs = maxOf(current.updatedAtMs, now)
+            )
+            save(moved).getOrThrow()
+            moved
+        }
+
+    /**
+     * Restore an entire recovery snapshot, never the external Android file.
+     * The caller verifies source bytes against their original fingerprint.
+     *
+     * If a linked source changed, cannot be read, or lacks a known fingerprint,
+     * write a separately identified untitled recovery copy BEFORE returning.
+     * The original Trash record stays intact for manual review; never risk
+     * overwriting the real source file.
+     */
+    fun restoreFromTrash(
+        id: DocumentIdentity,
+        expectedRevision: Long,
+        sourceMatches: Boolean
+    ): Result<DraftRestoreResult> = mutate {
+        val current = readDraftFile(id) ?: error("Recovery draft is missing")
+        check(current.trashedAtMs != null) { "Draft is not in Trash" }
+        check(current.revision == expectedRevision) {
+            "Trash entry changed. Reload Trash and try again."
+        }
+        check(current.revision < Long.MAX_VALUE) { "Draft revision is out of range" }
+        val now = System.currentTimeMillis().coerceAtLeast(1L)
+        if (current.sourceUri == null ||
+            (sourceMatches && current.sourceSha256 != null && current.sourceEncoding != null)
+        ) {
+            val restored = current.copy(
+                trashedAtMs = null,
+                revision = current.revision + 1L,
+                updatedAtMs = maxOf(current.updatedAtMs, now)
+            )
+            save(restored).getOrThrow()
+            DraftRestoreResult(restored, recoveredAsCopy = false)
+        } else {
+            // This file can never silently regain a Save-to-original connection.
+            // Keep the old Trash record until the user explicitly removes it.
+            val recovered = current.copy(
+                id = DocumentIdentity.newUntitled(),
+                sourceUri = null,
+                displayName = ("Recovered — " + current.displayName).take(120),
+                sourceSha256 = null,
+                savedToDisk = false,
+                trashedAtMs = null,
+                revision = 1L,
+                updatedAtMs = now
+            )
+            save(recovered).getOrThrow()
+            DraftRestoreResult(recovered, recoveredAsCopy = true)
+        }
+    }
+
+    /**
+     * Only explicitly confirmed Trash actions may remove private recovery bytes.
+     * Checks identity, stored revision, and Trash state. Never touches Android
+     * documents, SAF URIs, saved-file metadata, or untrashed drafts.
+     */
+    fun deleteTrashedPermanently(
+        id: DocumentIdentity,
+        expectedRevision: Long
+    ): Result<Unit> = mutate {
+        val current = readDraftFile(id) ?: error("Trash entry is missing")
+        check(current.trashedAtMs != null) { "Draft is not in Trash" }
+        check(current.revision == expectedRevision) {
+            "Trash entry changed. Reload Trash and try again."
+        }
+        if (!fileFor(id).delete()) {
+            throw IOException("Could not remove Trash recovery record")
+        }
     }
 
     /**
      * Only delete when the on-disk revision equals the revision that was
      * successfully written to the real file. Never clear newer unsaved edits.
      */
-    @Synchronized
     fun clearSavedRevision(id: DocumentIdentity, savedRevision: Long): Result<Boolean> =
-        runCatching {
-            val old = readDraftFile(id) ?: return@runCatching false
-            if (old.revision != savedRevision) return@runCatching false
+        mutate {
+            val old = readDraftFile(id) ?: return@mutate false
+            if (old.trashedAtMs != null) return@mutate false
+            if (old.revision != savedRevision) return@mutate false
             if (!fileFor(id).delete()) throw IOException("Could not delete saved recovery draft")
             true
         }
@@ -138,10 +399,9 @@ class RecoveryDraftStore(private val directory: File) {
      * Call this once when the V2 home/document manager becomes active.
      * It is intentionally not invoked by the existing app.
      */
-    @Synchronized
-    fun importLegacy(legacyDirectory: File): LegacyMigrationReport {
+    fun importLegacy(legacyDirectory: File): LegacyMigrationReport = synchronized(recoveryMutationLock) {
         if (File(directory, LEGACY_MARKER).exists()) {
-            return LegacyMigrationReport(0, 0, emptyList(), true)
+            return@synchronized LegacyMigrationReport(0, 0, emptyList(), true)
         }
         var imported = 0
         var alreadyPresent = 0
@@ -211,7 +471,7 @@ class RecoveryDraftStore(private val directory: File) {
                 failures.add(LEGACY_MARKER)
             }
         }
-        return LegacyMigrationReport(imported, alreadyPresent, failures, failures.isEmpty())
+        LegacyMigrationReport(imported, alreadyPresent, failures, failures.isEmpty())
     }
 
     private fun legacyPosition(content: String, line: Int, column: Int): Int {
@@ -262,6 +522,8 @@ class RecoveryDraftStore(private val directory: File) {
             out.writeBoolean(draft.sourceHadBom)
             out.writeShortString(draft.sourceSha256.orEmpty())
             out.writeBoolean(draft.savedToDisk)
+            out.writeBoolean(draft.trashedAtMs != null)
+            if (draft.trashedAtMs != null) out.writeLong(draft.trashedAtMs)
         }
         return bytes.toByteArray()
     }
@@ -270,7 +532,7 @@ class RecoveryDraftStore(private val directory: File) {
         DataInputStream(ByteArrayInputStream(bytes)).use { input ->
             require(input.readInt() == MAGIC) { "Unrecognized draft format" }
             val version = input.readInt()
-            require(version == 1 || version == FORMAT_VERSION) { "Unsupported draft version" }
+            require(version in 1..FORMAT_VERSION) { "Unsupported draft version" }
             val id = DocumentIdentity.fromStored(input.readShortString())
             val uri = if (input.readBoolean()) input.readShortString() else null
             val name = input.readShortString()
@@ -288,6 +550,7 @@ class RecoveryDraftStore(private val directory: File) {
             val sourceHadBom = if (version >= 2) input.readBoolean() else false
             val sourceHash = if (version >= 2) input.readShortString().ifBlank { null } else null
             val savedToDisk = if (version >= 2) input.readBoolean() else false
+            val trashedAtMs = if (version >= 3 && input.readBoolean()) input.readLong() else null
             require(input.read() == -1) { "Unexpected trailing data" }
             val decoder = Charsets.UTF_8.newDecoder()
                 .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
@@ -295,7 +558,7 @@ class RecoveryDraftStore(private val directory: File) {
             val content = decoder.decode(java.nio.ByteBuffer.wrap(contentBytes)).toString()
             RecoveryDraft(id, uri, name, language, content, selectionStart, selectionEnd,
                 scrollY, revision, updatedAt, sourceEncoding, sourceHadBom,
-                sourceHash, savedToDisk)
+                sourceHash, savedToDisk, trashedAtMs)
         }
 
     private fun DataOutputStream.writeShortString(s: String) {

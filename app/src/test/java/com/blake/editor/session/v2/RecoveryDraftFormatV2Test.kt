@@ -62,6 +62,57 @@ class RecoveryDraftFormatV2Test {
         assertEquals("old", workspace.load(loaded.id).getOrThrow()?.content)
     }
 
+    @Test fun trashMetadataRoundTripsWithoutChangingTheDraft() {
+        val original = RecoveryDraft(
+            id = DocumentIdentity.newUntitled(), sourceUri = null,
+            displayName = "My Work", language = "MARKDOWN",
+            content = "Draft with unsaved edits",
+            selectionStart = 4, selectionEnd = 9, scrollY = 81,
+            revision = 7, trashedAtMs = 123456789L
+        )
+        store.save(original).getOrThrow()
+        val restored = RecoveryDraftStore(root).load(original.id).getOrThrow()
+        assertEquals(original, restored)
+        assertEquals(123456789L, restored?.trashedAtMs)
+    }
+
+    @Test fun readsExistingVersionTwoFilesWithNoTrashMetadata() {
+        val id = DocumentIdentity.newUntitled()
+        val record = ByteArrayOutputStream()
+        DataOutputStream(record).use { out ->
+            out.writeInt(0x424C4B32)
+            out.writeInt(2)
+            fun field(text: String) {
+                val bytes = text.toByteArray(Charsets.UTF_8)
+                out.writeInt(bytes.size)
+                out.write(bytes)
+            }
+            field(id.value)
+            out.writeBoolean(false)
+            field("Old V2 document")
+            field("PLAIN_TEXT")
+            out.writeInt(1)
+            out.writeInt(3)
+            out.writeInt(21)
+            out.writeLong(4)
+            out.writeLong(123)
+            val content = "hello".toByteArray(Charsets.UTF_8)
+            out.writeInt(content.size)
+            out.write(content)
+            field("")
+            out.writeBoolean(false)
+            field("")
+            out.writeBoolean(false)
+        }
+        root.resolve(id.value + ".recovery").writeBytes(record.toByteArray())
+        val old = store.load(id).getOrThrow()!!
+        assertEquals("hello", old.content)
+        assertEquals("Old V2 document", old.displayName)
+        assertNull(old.trashedAtMs)
+        store.save(old.copy(revision = 5)).getOrThrow()
+        assertNull(RecoveryDraftStore(root).load(id).getOrThrow()?.trashedAtMs)
+    }
+
     @Test fun canReadOldVersionOneRecoveryFileWithoutDroppingContent() {
         val id = DocumentIdentity.newUntitled()
         val record = ByteArrayOutputStream()

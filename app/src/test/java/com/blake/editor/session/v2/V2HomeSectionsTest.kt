@@ -31,6 +31,7 @@ class V2HomeSectionsTest {
         val sections = V2HomeSections.from(RecoveryListing(emptyList(), emptyList()))
         assertTrue(sections.continueWriting.isEmpty())
         assertTrue(sections.recentlySaved.isEmpty())
+        assertTrue(sections.trash.isEmpty())
     }
 
     @Test fun groupsRecoveryAndSavedFilesWithoutChangingTheirRelativeOrder() {
@@ -42,6 +43,34 @@ class V2HomeSectionsTest {
         assertEquals(listOf("one", "three"), sections.recentlySaved.map { it.displayName })
         assertEquals(entries, listing.drafts)
         assertEquals(listOf("unreadable.recovery"), listing.unreadableFiles)
+    }
+
+    @Test fun trashTaggedRecordsStayStoredButOffHome() {
+        val active = unsaved("Keep")
+        val trashed = unsaved("Hidden").copy(trashedAtMs = 55L)
+        val savedTrashed = saved("Old saved").copy(trashedAtMs = 56L)
+        val listing = RecoveryListing(listOf(active, trashed, savedTrashed), emptyList())
+        val sections = V2HomeSections.from(listing)
+        assertEquals(listOf(active), sections.continueWriting)
+        assertTrue(sections.recentlySaved.isEmpty())
+        assertEquals(listOf(trashed, savedTrashed), sections.trash)
+        assertEquals(3, listing.drafts.size)
+    }
+
+    @Test fun hidingRecentShortcutDoesNotHideUnsavedRecoveryOrTrash() {
+        val savedOne = saved("one")
+        val savedTwo = saved("two")
+        val unsaved = unsaved("editing")
+        val trashed = unsaved("trashed").copy(trashedAtMs = 100L)
+        val listing = RecoveryListing(
+            listOf(savedOne, unsaved, savedTwo, trashed),
+            emptyList(), setOf(savedOne.id, unsaved.id)
+        )
+        val sections = V2HomeSections.from(listing)
+        assertEquals(listOf(savedTwo), sections.recentlySaved)
+        assertEquals(listOf(unsaved), sections.continueWriting)
+        assertEquals(listOf(trashed), sections.trash)
+        assertEquals(4, listing.drafts.size)
     }
 
     @Test fun everyUnsavedDraftStaysVisibleInContinueWriting() {

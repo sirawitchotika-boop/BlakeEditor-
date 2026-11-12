@@ -2,6 +2,8 @@ package com.blake.editor.ui.preview
 
 import android.content.Context
 import android.content.res.Configuration
+import com.blake.editor.core.model.ThemeMode
+import com.blake.editor.settings.SharedEditorTheme
 
 enum class PreviewTheme(val title: String) {
     FOLLOW_SYSTEM("Follow System"),
@@ -38,10 +40,17 @@ class PreviewEditorSettings(private val context: Context) {
     )
 
     var theme: PreviewTheme
-        get() = runCatching {
+        get() = SharedEditorTheme.read(context)?.let { chosen ->
+            PreviewTheme.valueOf(chosen.name)
+        } ?: runCatching {
             PreviewTheme.valueOf(prefs.getString("theme", "FOLLOW_SYSTEM") ?: "FOLLOW_SYSTEM")
         }.getOrDefault(PreviewTheme.FOLLOW_SYSTEM)
-        set(value) { prefs.edit().putString("theme", value.name).apply() }
+        set(value) {
+            // Keep V2's old key for compatibility while sharing the choice
+            // with Original. Drafts and other editor settings stay separate.
+            prefs.edit().putString("theme", value.name).apply()
+            SharedEditorTheme.remember(context, ThemeMode.valueOf(value.name))
+        }
 
     var fontSp: Int
         get() = prefs.getInt("font_sp", 16).coerceIn(12, 26)

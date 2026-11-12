@@ -9,12 +9,16 @@ package com.blake.editor.session.v2
  */
 data class V2HomeSections(
     val continueWriting: List<RecoveryDraft>,
-    val recentlySaved: List<RecoveryDraft>
+    val recentlySaved: List<RecoveryDraft>,
+    val trash: List<RecoveryDraft> = emptyList()
 ) {
     companion object {
         fun from(listing: RecoveryListing): V2HomeSections = V2HomeSections(
-            continueWriting = listing.drafts.filterNot { it.savedToDisk },
-            recentlySaved = listing.drafts.filter { it.savedToDisk }
+            continueWriting = listing.drafts.filter { it.trashedAtMs == null && !it.savedToDisk },
+            recentlySaved = listing.drafts.filter {
+                it.trashedAtMs == null && it.savedToDisk && it.id !in listing.hiddenRecentIds
+            },
+            trash = listing.drafts.filter { it.trashedAtMs != null }
         )
     }
 }
