@@ -1,5 +1,9 @@
 package com.blake.editor.ui.main
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -43,12 +47,12 @@ class SaveCompletionPolicyTest {
             SaveCompletionPolicy.decide(original, original.copy(editRevision = 15), true))
     }
 
-    @Test fun overlappingSaveWritesAreSerialized() = kotlinx.coroutines.runBlocking {
+    @Test fun overlappingSaveWritesAreSerialized() = runBlocking {
         val gate = SerializedDocumentSaveGate()
-        val firstEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val releaseFirst = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val firstEntered = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
         val order = mutableListOf<String>()
-        val first = kotlinx.coroutines.launch {
+        val first = launch {
             gate.run {
                 order.add("first-start")
                 firstEntered.complete(Unit)
@@ -57,10 +61,10 @@ class SaveCompletionPolicyTest {
             }
         }
         firstEntered.await()
-        val second = kotlinx.coroutines.launch {
+        val second = launch {
             gate.run { order.add("second") }
         }
-        kotlinx.coroutines.yield()
+        yield()
         assertEquals(listOf("first-start"), order)
         releaseFirst.complete(Unit)
         first.join()
@@ -68,7 +72,7 @@ class SaveCompletionPolicyTest {
         assertEquals(listOf("first-start", "first-end", "second"), order)
     }
 
-    @Test fun failedWriteDoesNotKeepSaveGateLocked() = kotlinx.coroutines.runBlocking {
+    @Test fun failedWriteDoesNotKeepSaveGateLocked() = runBlocking {
         val gate = SerializedDocumentSaveGate()
         try {
             gate.run<Unit> { error("simulated failure") }
