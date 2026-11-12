@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 
 class MainViewModel(
     private val documentRepository: DocumentRepository,
@@ -36,6 +37,9 @@ class MainViewModel(
     private var draftSaveJob: Job? = null
     private var sessionSaveJob: Job? = null
     private var activeDocumentOpen: Job? = null
+    private val draftMutationMutex = Mutex()
+    private val documentSaveGate = SerializedDocumentSaveGate()
+    private var editRevision: Long = 0L
 
     /** Consume the one-shot event before showing the reader prompt. */
     fun consumeLargeFileRequest() {
@@ -78,6 +82,7 @@ class MainViewModel(
     fun onContentChanged(newContent: String) {
         val previousContent = _uiState.value.content
         if (previousContent == newContent) return
+        editRevision += 1
 
         _uiState.update { current ->
             current.copy(content = newContent, isDirty = true)
@@ -281,74 +286,187 @@ class MainViewModel(
         }
     }
 
+
+    private enum class SaveFinish { CURRENT, STALE, RECOVERY_FAILED }
+
+    private fun currentSaveSnapshot(): SaveStateSnapshot {
+        val state = _uiState.value
+        return SaveStateSnapshot(state.currentUri?.toString(), state.documentGeneration, editRevision)
+    }
+
+    private fun sameSnapshot(snapshot: SaveStateSnapshot): Boolean =
+        SaveCompletionPolicy.decide(snapshot, currentSaveSnapshot(), writeSucceeded = true) ==
+            SaveCompletionDecision.CURRENT
+
+    /**
+     * Serialize recovery writes and cleanup. If editing continues while clearDraft
+     * is suspended, recreate the latest dirty draft before releasing the lock.
+     */
+    private suspend fun completeSuccessfulWrite(
+        snapshot: SaveStateSnapshot,
+        draftUri: Uri?,
+        cleanState: (MainUiState) -> MainUiState
+    ): SaveFinish {
+        draftSaveJob?.cancel()
+        draftMutationMutex.lock()
+        try {
+            if (!sameSnapshot(snapshot)) {
+                return if (persistDirtyDraftLocked()) SaveFinish.STALE else SaveFinish.RECOVERY_FAILED
+            }
+
+            val cleared = draftRepository.clearDraft(draftUri)
+            if (!sameSnapshot(snapshot)) {
+                return if (persistDirtyDraftLocked()) SaveFinish.STALE else SaveFinish.RECOVERY_FAILED
+            }
+
+            if (cleared.isFailure) return SaveFinish.RECOVERY_FAILED
+            _uiState.update(cleanState)
+            return SaveFinish.CURRENT
+        } finally {
+            draftMutationMutex.unlock()
+        }
+    }
+
+    private suspend fun persistDirtyDraftLocked(): Boolean {
+        // Repeat a bounded number of times if edits arrive during a draft write.
+        repeat(3) {
+            val state = _uiState.value
+            if (!state.isDirty) return true
+            val stamp = currentSaveSnapshot()
+            val session = EditorSession(
+                uri = state.currentUri,
+                displayName = state.fileName,
+                syntaxMode = state.syntaxMode,
+                isDirty = true,
+                cursorLine = state.cursorLine,
+                cursorColumn = state.cursorColumn,
+                scrollPosition = state.scrollPosition
+            )
+            if (draftRepository.saveDraft(session, state.content).isFailure) return false
+            if (sameSnapshot(stamp)) return true
+        }
+        // Continuous editing still schedules its own debounced draft save.
+        return false
+    }
+
+    private fun reportUnfinishedSave(snapshot: SaveStateSnapshot, finish: SaveFinish) {
+        _uiState.update { current ->
+            if (current.documentGeneration != snapshot.documentGeneration ||
+                current.currentUri?.toString() != snapshot.uriKey) {
+                current // Do not overwrite another document's status.
+            } else {
+                val message = when (finish) {
+                    SaveFinish.STALE -> "Older version saved; newer edits remain unsaved"
+                    SaveFinish.RECOVERY_FAILED -> "File saved; recovery draft needs attention"
+                    SaveFinish.CURRENT -> current.statusMessage
+                }
+                current.copy(isLoading = false, statusMessage = message)
+            }
+        }
+        updateSession()
+    }
+
+    private fun reportFailedWrite(snapshot: SaveStateSnapshot, message: String) {
+        // Newer edits in the *same* document still need the loading indicator reset.
+        _uiState.update { current ->
+            if (current.documentGeneration == snapshot.documentGeneration &&
+                current.currentUri?.toString() == snapshot.uriKey) {
+                current.copy(isLoading = false, statusMessage = message)
+            } else {
+                current // Never disturb a different document that replaced this one.
+            }
+        }
+    }
+
     fun saveDocument(onComplete: ((Boolean) -> Unit)? = null) {
-        val uri = _uiState.value.currentUri
+        val state = _uiState.value
+        val uri = state.currentUri
         if (uri == null) {
             _uiState.update { it.copy(statusMessage = "No file open. Use Save As.") }
             onComplete?.invoke(false)
             return
         }
+        val snapshot = currentSaveSnapshot()
+        val contentToSave = state.content
 
-        val contentToSave = _uiState.value.content
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Saving file...") }
-            documentRepository.write(uri, contentToSave)
-                .onSuccess {
-                    draftRepository.clearDraft(uri)
-                    _uiState.update {
-                        it.copy(
-                            isDirty = false,
-                            isLoading = false,
-                            statusMessage = "Saved: ${it.fileName}"
-                        )
-                    }
-                    updateSession()
-                    onComplete?.invoke(true)
-                }
-                .onFailure { error ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            statusMessage = "Error saving file: ${error.message}"
-                        )
-                    }
+            documentSaveGate.run {
+                // Never write an obsolete Save queued behind a newer operation.
+                if (!sameSnapshot(snapshot)) {
+                    reportUnfinishedSave(snapshot, SaveFinish.STALE)
                     onComplete?.invoke(false)
+                    return@run
                 }
+
+                _uiState.update { it.copy(isLoading = true, statusMessage = "Saving file...") }
+                documentRepository.write(uri, contentToSave)
+                    .onSuccess {
+                        val finish = completeSuccessfulWrite(snapshot, uri) {
+                            it.copy(
+                                isDirty = false,
+                                isLoading = false,
+                                statusMessage = "Saved: ${it.fileName}"
+                            )
+                        }
+                        if (finish == SaveFinish.CURRENT) {
+                            updateSession()
+                            onComplete?.invoke(true)
+                        } else {
+                            reportUnfinishedSave(snapshot, finish)
+                            onComplete?.invoke(false)
+                        }
+                    }
+                    .onFailure { error ->
+                        reportFailedWrite(snapshot, "Error saving file: ${error.message}")
+                        onComplete?.invoke(false)
+                    }
+                Unit
+            }
         }
     }
 
     fun saveAsDocument(newUri: Uri) {
-        val oldUri = _uiState.value.currentUri
-        val contentToSave = _uiState.value.content
+        val state = _uiState.value
+        val oldUri = state.currentUri
+        val snapshot = currentSaveSnapshot()
+        val contentToSave = state.content
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Saving to new file...") }
-            documentRepository.write(newUri, contentToSave)
-                .onSuccess {
-                    draftRepository.clearDraft(oldUri)
-                    val metadataResult = documentRepository.getMetadata(newUri)
-                    val name = metadataResult.getOrNull()?.displayName ?: "saved_file.txt"
-                    val syntax = SyntaxResolver.resolve(name, metadataResult.getOrNull()?.mimeType)
-                    _uiState.update {
-                        it.copy(
-                            currentUri = newUri,
-                            fileName = name,
-                            syntaxMode = syntax,
-                            isDirty = false,
-                            isLoading = false,
-                            statusMessage = "Saved As: $name"
-                        )
-                    }
-                    updateSession()
+            documentSaveGate.run {
+                // Save As also shares the same ordered write gate with Save.
+                if (!sameSnapshot(snapshot)) {
+                    reportUnfinishedSave(snapshot, SaveFinish.STALE)
+                    return@run
                 }
-                .onFailure { error ->
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            statusMessage = "Error in Save As: ${error.message}"
-                        )
+
+                _uiState.update { it.copy(isLoading = true, statusMessage = "Saving to new file...") }
+                documentRepository.write(newUri, contentToSave)
+                    .onSuccess {
+                        val metadata = documentRepository.getMetadata(newUri).getOrNull()
+                        val name = metadata?.displayName ?: "saved_file.txt"
+                        val syntax = SyntaxResolver.resolve(name, metadata?.mimeType)
+                        val finish = completeSuccessfulWrite(snapshot, oldUri) {
+                            it.copy(
+                                currentUri = newUri,
+                                fileName = name,
+                                syntaxMode = syntax,
+                                isDirty = false,
+                                isLoading = false,
+                                statusMessage = "Saved As: $name"
+                            )
+                        }
+                        if (finish == SaveFinish.CURRENT) {
+                            updateSession()
+                        } else {
+                            // Keep the existing URI and unsaved recovery when edits arrived.
+                            reportUnfinishedSave(snapshot, finish)
+                        }
                     }
-                }
+                    .onFailure { error ->
+                        reportFailedWrite(snapshot, "Error in Save As: ${error.message}")
+                    }
+                Unit
+            }
         }
     }
 
@@ -396,19 +514,12 @@ class MainViewModel(
     }
 
     private suspend fun saveDraftInternal() {
-        val state = _uiState.value
-        if (!state.isDirty) return
-
-        val session = EditorSession(
-            uri = state.currentUri,
-            displayName = state.fileName,
-            syntaxMode = state.syntaxMode,
-            isDirty = true,
-            cursorLine = state.cursorLine,
-            cursorColumn = state.cursorColumn,
-            scrollPosition = state.scrollPosition
-        )
-        draftRepository.saveDraft(session, state.content)
+        draftMutationMutex.lock()
+        try {
+            persistDirtyDraftLocked()
+        } finally {
+            draftMutationMutex.unlock()
+        }
     }
 
     private fun updateSession() {
