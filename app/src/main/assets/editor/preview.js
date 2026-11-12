@@ -1,64 +1,63 @@
 /**
- * Blake Editor - Markdown Preview Pipeline
- * Parses Markdown using Marked and sanitizes HTML via DOMPurify before rendering.
+ * Blake Editor — Markdown preview.
+ * Do not render parsed HTML unless a working sanitizer returned a string.
+ * Missing/broken sanitizer and parser fall back to inert plain text.
  */
 (function () {
+    "use strict";
     const previewContainer = document.getElementById("preview");
     const editorContainer = document.getElementById("editor");
 
     function renderContent(markdownText) {
         if (!previewContainer) return;
-        let html = "";
+        const source = String(markdownText || "");
         try {
-            if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
-                html = marked.parse(markdownText || "");
-            } else if (typeof marked === 'function') {
-                html = marked(markdownText || "");
+            // This preview uses a JS-enabled WebView with an Android bridge:
+            // never pass Marked's unsanitized HTML to innerHTML.
+            if (typeof DOMPurify === "undefined" || !DOMPurify ||
+                typeof DOMPurify.sanitize !== "function" ||
+                DOMPurify.isSupported === false) {
+                previewContainer.textContent = source;
+                return;
+            }
+
+            let html;
+            if (typeof marked !== "undefined" && marked &&
+                typeof marked.parse === "function") {
+                html = marked.parse(source);
+            } else if (typeof marked === "function") {
+                html = marked(source);
             } else {
-                html = escapeHtml(markdownText || "").replace(/\n/g, "<br>");
+                previewContainer.textContent = source;
+                return;
             }
-        } catch (e) {
-            console.error("Marked parsing error:", e);
-            html = "<p style='color:red;'>Markdown parse error</p>";
-        }
 
-        try {
-            if (typeof DOMPurify !== 'undefined' && typeof DOMPurify.sanitize === 'function') {
-                html = DOMPurify.sanitize(html, {
-                    USE_PROFILES: { html: true }
-                });
+            const clean = DOMPurify.sanitize(html, {
+                USE_PROFILES: { html: true }
+            });
+            if (typeof clean !== "string") {
+                throw new TypeError("Markdown sanitizer returned non-text HTML");
             }
-        } catch (e) {
-            console.error("DOMPurify sanitization error:", e);
+            previewContainer.innerHTML = clean;
+        } catch (error) {
+            console.error("Markdown preview unavailable:", error);
+            // Setting textContent clears any previously rendered HTML as well.
+            previewContainer.textContent = source;
         }
-
-        previewContainer.innerHTML = html;
-    }
-
-    function escapeHtml(text) {
-        const div = document.createElement("div");
-        div.textContent = text;
-        return div.innerHTML;
     }
 
     window.PreviewHost = {
         show: function (markdownText) {
             renderContent(markdownText);
-            if (editorContainer) {
-                editorContainer.style.display = "none";
-            }
+            if (editorContainer) editorContainer.style.display = "none";
             if (previewContainer) {
                 previewContainer.style.display = "block";
                 previewContainer.scrollTop = 0;
             }
         },
         hide: function () {
-            if (previewContainer) {
-                previewContainer.style.display = "none";
-            }
-            if (editorContainer) {
-                editorContainer.style.display = "block";
-            }
+            if (previewContainer) previewContainer.style.display = "none";
+            if (editorContainer) editorContainer.style.display = "block";
         },
         render: function (markdownText) {
             renderContent(markdownText);
