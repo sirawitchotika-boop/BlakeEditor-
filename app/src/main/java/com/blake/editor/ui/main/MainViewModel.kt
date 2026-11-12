@@ -67,7 +67,7 @@ class MainViewModel(
     }
 
     /** Claim startup once per ViewModel, not once per Activity instance. */
-    fun claimInitialActivityAction(hasIncomingDocument: Boolean): OriginalStartupAction =
+    internal fun claimInitialActivityAction(hasIncomingDocument: Boolean): OriginalStartupAction =
         startupRestoreGate.claimInitialAction(hasIncomingDocument)
 
     fun setThemeMode(mode: ThemeMode) {
