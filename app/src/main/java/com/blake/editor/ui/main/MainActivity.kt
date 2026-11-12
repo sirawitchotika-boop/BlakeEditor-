@@ -132,13 +132,12 @@ class MainActivity : AppCompatActivity() {
         setupBackNavigation()
         observeState()
 
-        if (savedInstanceState == null) {
-            val request = IncomingIntentParser.parse(intent)
-            if (request != null) {
-                handleIncomingIntent(intent)
-            } else {
-                viewModel.restoreSessionOrDraft()
-            }
+        // Saved Activity state can survive process death while its ViewModel does not.
+        // A retained ViewModel (rotation) must NOT reload stale disk data over live edits.
+        when (viewModel.claimInitialActivityAction(IncomingIntentParser.parse(intent) != null)) {
+            OriginalStartupAction.OPEN_INCOMING -> handleIncomingIntent(intent)
+            OriginalStartupAction.RESTORE_SESSION -> viewModel.restoreSessionOrDraft()
+            OriginalStartupAction.ALREADY_INITIALIZED -> Unit
         }
     }
 
