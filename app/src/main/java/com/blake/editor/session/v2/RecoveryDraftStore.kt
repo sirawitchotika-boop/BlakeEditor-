@@ -503,6 +503,73 @@ class RecoveryDraftStore(private val directory: File) {
         }
 
     /**
+     * Create an unlinked recovery copy only after a deliberate, user-confirmed
+     * historical comparison. No UI calls this method yet.
+     *
+     * Reinspect both stores under the Original and V2 process locks before
+     * writing, so stale review screens cannot recover out-of-date content.
+     * A stable content-derived ID makes repeated confirmations idempotent
+     * across app restarts without a separate mutable migration marker.
+     *
+     * Never writes Original's draft, external SAF documents, the import marker,
+     * any existing V2 record, or the untitled naming counter.
+     */
+    fun copyHistoricalOriginalAfterConfirmation(
+        legacyDirectory: File,
+        reviewed: HistoricalDraftDifference,
+        explicitlyConfirmed: Boolean
+    ): Result<RecoveryDraft> =
+        synchronized(recoveryMutationLock) {
+            synchronized(FileDraftRepository.draftMutationLock) {
+                runCatching {
+                    check(explicitlyConfirmed) { "Review both versions and confirm a separate copy" }
+                    val current = inspectHistoricalImports(legacyDirectory).getOrThrow()
+                        .singleOrNull { it.id == reviewed.id }
+                        ?: error("Original draft is no longer available for recovery")
+                    check(current == reviewed) {
+                        "Original or V2 draft changed. Review the latest versions first."
+                    }
+                    val copyId = historicalCopyId(reviewed)
+                    val previous = readDraftFile(copyId)
+                    if (previous != null) {
+                        check(previous.sourceUri == null &&
+                            previous.sourceSha256 == null &&
+                            !previous.savedToDisk &&
+                            previous.trashedAtMs == null &&
+                            previous.content == reviewed.originalContent
+                        ) {
+                            "A prior recovery copy changed; it was preserved."
+                        }
+                        return@runCatching previous
+                    }
+                    val name = ("Recovered Original — " + reviewed.originalDisplayName).take(120)
+                    val copy = RecoveryDraft(
+                        id = copyId,
+                        sourceUri = null,
+                        displayName = name,
+                        language = "PLAIN_TEXT",
+                        content = reviewed.originalContent
+                    )
+                    save(copy).getOrThrow()
+                    copy
+                }
+            }
+        }
+
+    private fun historicalCopyId(reviewed: HistoricalDraftDifference): DocumentIdentity {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.update(
+            "blake-v2-historical-copy-v1\\n${reviewed.id.value}\\n".toByteArray(Charsets.UTF_8)
+        )
+        val hash = digest.digest(reviewed.originalContent.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return DocumentIdentity.fromStored(
+            "new-${hash.substring(0, 8)}-${hash.substring(8, 12)}-" +
+                "${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}"
+        )
+    }
+
+    /**
      * Non-destructive, one-time import of Original's currently committed draft.
      *
      * Original used <key>.draft/.meta before two-slot draft commits. Newer

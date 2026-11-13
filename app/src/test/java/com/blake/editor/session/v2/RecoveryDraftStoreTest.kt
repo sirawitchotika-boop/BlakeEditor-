@@ -969,6 +969,178 @@ class RecoveryDraftStoreTest {
         assertTrue(markerBytes.contentEquals(marker.readBytes()))
     }
 
+    @Test fun historicalCopyRequiresExplicitConfirmationAndLeavesEverythingUnchanged() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "private Original content")
+        File(original, "untitled.active").writeText("0")
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+        val originalBytes = File(original, "untitled.draft.0").readBytes()
+        val reviewed = store.inspectHistoricalImports(original).getOrThrow().single()
+
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = false).isFailure)
+        assertTrue(store.list().drafts.isEmpty())
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertTrue(originalBytes.contentEquals(File(original, "untitled.draft.0").readBytes()))
+        assertFalse(File(dir, "v2/next-untitled-number.counter").exists())
+    }
+
+    @Test fun historicalCopyUsesFreshUnlinkedIdentityAndPreservesOriginalAndV2() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        val uri = "content://provider.example/document/safe-42"
+        val linkedId = DocumentIdentity.forUri(uri)
+        val key = linkedId.value.removePrefix("uri-")
+        val meta = Properties().apply {
+            setProperty("uri", uri)
+            setProperty("displayName", "linked-Original.kt")
+            setProperty("syntaxMode", "KOTLIN")
+        }
+        File(original, "${key}.meta.1").outputStream().use {
+            meta.store(it, "committed Original linked draft")
+        }
+        val textFile = File(original, "${key}.draft.1")
+        textFile.writeText("Original private edits")
+        File(original, "${key}.active").writeText("1")
+        val v2 = RecoveryDraft(linkedId, uri, "V2 linked file", "KOTLIN",
+            "keep independent V2 edits", revision = 4, sourceEncoding = "UTF8",
+            sourceSha256 = "a".repeat(64), savedToDisk = true)
+        store.save(v2).getOrThrow()
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+        val originalBytes = textFile.readBytes()
+        val reviewed = store.inspectHistoricalImports(original).getOrThrow().single()
+
+        val recovered = store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).getOrThrow()
+        assertNotEquals(linkedId, recovered.id)
+        assertTrue(recovered.id.value.startsWith("new-"))
+        assertNull(recovered.sourceUri)
+        assertNull(recovered.sourceSha256)
+        assertNull(recovered.sourceEncoding)
+        assertFalse(recovered.sourceHadBom)
+        assertFalse(recovered.savedToDisk)
+        assertNull(recovered.trashedAtMs)
+        assertEquals("Original private edits", recovered.content)
+        assertTrue(recovered.displayName.startsWith("Recovered Original"))
+        assertEquals(recovered, RecoveryDraftStore(File(dir, "v2"))
+            .load(recovered.id).getOrThrow())
+        assertEquals(v2, store.load(linkedId).getOrThrow())
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertTrue(originalBytes.contentEquals(textFile.readBytes()))
+        assertFalse(File(dir, "v2/next-untitled-number.counter").exists())
+    }
+
+    @Test fun historicalCopyRepeatConfirmationIsIdempotentAcrossReopens() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "Original copy once")
+        File(original, "untitled.active").writeText("0")
+        val reviewed = store.inspectHistoricalImports(original).getOrThrow().single()
+        val first = store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).getOrThrow()
+        val copyFile = File(dir, "v2/${first.id.value}.recovery")
+        val copyBytes = copyFile.readBytes()
+
+        val reopened = RecoveryDraftStore(File(dir, "v2"))
+        val second = reopened.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).getOrThrow()
+        assertEquals(first, second)
+        assertEquals(1, reopened.list().drafts.size)
+        assertTrue(copyBytes.contentEquals(copyFile.readBytes()))
+        assertFalse(File(dir, "v2/next-untitled-number.counter").exists())
+    }
+
+    @Test fun historicalCopyRejectsStaleOriginalSnapshotWithoutWriting() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "Original before review")
+        File(original, "untitled.active").writeText("0")
+        val reviewed = store.inspectHistoricalImports(original).getOrThrow().single()
+        writeOriginalPair(original, "0", "Original changed later")
+        val current = File(original, "untitled.draft.0").readBytes()
+
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).isFailure)
+        assertTrue(store.list().drafts.isEmpty())
+        assertTrue(current.contentEquals(File(original, "untitled.draft.0").readBytes()))
+        assertFalse(File(dir, "v2/next-untitled-number.counter").exists())
+    }
+
+    @Test fun historicalCopyRejectsStaleV2RevisionAndKeepsEditedRecord() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "Original version")
+        File(original, "untitled.active").writeText("0")
+        val id = DocumentIdentity.legacyUntitled()
+        val v2 = draft(id, "V2 earlier", 2)
+        store.save(v2).getOrThrow()
+        val reviewed = store.inspectHistoricalImports(original).getOrThrow().single()
+        val updatedV2 = v2.copy(content = "V2 edited after review", revision = 3)
+        store.save(updatedV2).getOrThrow()
+
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).isFailure)
+        assertEquals(updatedV2, store.load(id).getOrThrow())
+        assertEquals(1, store.list().drafts.size)
+    }
+
+    @Test fun historicalCopyRefusesOriginalTombstoneAndIncompletePair() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "should not resurrect")
+        val active = File(original, "untitled.active")
+        active.writeText("0")
+        val reviewed = store.inspectHistoricalImports(original).getOrThrow().single()
+
+        active.writeText("deleted")
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).isFailure)
+        active.writeText("0")
+        assertTrue(File(original, "untitled.meta.0").delete())
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).isFailure)
+        assertTrue(store.list().drafts.isEmpty())
+        assertEquals("should not resurrect", File(original, "untitled.draft.0").readText())
+    }
+
+    @Test fun historicalCopyCannotOverwriteUserModifiedOrTrashedPreviousCopy() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "Original exact text")
+        File(original, "untitled.active").writeText("0")
+        val reviewed = store.inspectHistoricalImports(original).getOrThrow().single()
+        val first = store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).getOrThrow()
+        val edited = first.copy(content = "changed recovered text", revision = 2)
+        store.save(edited).getOrThrow()
+
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).isFailure)
+        assertEquals(edited, store.load(first.id).getOrThrow())
+        val trashed = store.moveToTrash(first.id, edited.revision).getOrThrow()
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, reviewed, explicitlyConfirmed = true).isFailure)
+        assertEquals(trashed, store.load(first.id).getOrThrow())
+        assertEquals(1, store.list().drafts.size)
+        assertFalse(File(dir, "v2/next-untitled-number.counter").exists())
+    }
+
+    @Test fun historicalCopyCannotRunWithoutAnEarlierImportMarker() {
+        val original = File(dir, "drafts")
+        writeOriginalPair(original, null, "Original unimported")
+        val id = DocumentIdentity.legacyUntitled()
+        val fake = HistoricalDraftDifference(
+            id, null, "Original.txt", "Original unimported", null)
+        assertTrue(store.copyHistoricalOriginalAfterConfirmation(
+            original, fake, explicitlyConfirmed = true).isFailure)
+        assertTrue(store.list().drafts.isEmpty())
+        assertFalse(File(dir, "v2/legacy-imported.marker").exists())
+        assertEquals("Original unimported", File(original, "untitled.draft").readText())
+    }
+
     @Test fun unreadableOriginalDirectoryCannotMarkMigrationComplete() {
         val invalid = File(dir, "drafts")
         invalid.writeText("not a directory")
