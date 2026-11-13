@@ -97,7 +97,7 @@ class FileDraftRepository(
                     when (val slot = readMarker(key)) {
                         "deleted" -> null
                         null -> readPair(legacyContent(key), legacyMetadata(key))
-                        else -> readPair(slotContent(key, slot), slotMetadata(key))
+                        else -> readPair(slotContent(key, slot), slotMetadata(key, slot))
                             ?: error("Committed draft pair is missing; older files were retained")
                     }
                 }
