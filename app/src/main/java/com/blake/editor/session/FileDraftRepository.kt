@@ -173,6 +173,7 @@ class FileDraftRepository(
         const val DEFAULT_DEBOUNCE_MILLIS: Long = 800L
 
         // Protects all repository instances within this app process.
-        private val draftMutationLock = Any()
+        // Shared with the V2 one-time importer so it reads a whole committed pair.
+        internal val draftMutationLock = Any()
     }
 }
