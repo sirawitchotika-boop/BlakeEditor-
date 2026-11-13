@@ -39,6 +39,17 @@ android {
                         ".debug"
                     }
             isDebuggable = true
+
+            // Launcher labels are debug-only. Show a short CI run marker so
+            // side-by-side test APKs cannot be confused on a phone.
+            // The full, unique run identity remains in applicationIdSuffix.
+            val isolatedRunTag = providers.gradleProperty("isolatedTestApkSuffix").orNull
+                ?.let { Regex("""^\.test([0-9]+)a([0-9]+)$""").matchEntire(it) }
+                ?.let { "T${it.groupValues[1].takeLast(6)}a${it.groupValues[2]}" }
+                ?: "Debug"
+            resValue("string", "blake_debug_editor_label", "Blake $isolatedRunTag")
+            resValue("string", "blake_debug_v2_label", "V2 $isolatedRunTag")
+            resValue("string", "blake_debug_input_label", "Input $isolatedRunTag")
         }
     }
 
