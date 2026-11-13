@@ -3,7 +3,7 @@
 **Audit date:** 2026-11-13 (Asia/Bangkok)  
 **Project:** `sirawitchotika-boop/BlakeEditor-`  
 **Original audit baseline:** `f4be4149bc7183ec5472e5d4d493691f9db02a07` (before PR #49)  
-**Refreshed source checkpoint (2026-11-13):** `6f1e5138299ee253bf613dc91e0f8ce41cfc1b3a` (after PR #49)  
+**Refreshed source checkpoint (2026-11-13):** `31e0d6dfee423d33f874892d9bf915b62c5d1aed` (after merged PR #54; earlier PR #49 checkpoint remains historical)  
 **Current gate:** **BLOCKED** for a signed production release. This document combines the earlier merged read-only audit with an updated source checkpoint. It does **not** approve signing, distribution, installation, merge, backup-policy changes, migration, or launcher promotion.
 
 ## Evidence and known results
@@ -13,6 +13,8 @@
 - Production application ID is `com.blake.editor`, `versionCode=1`, `versionName=0.1.0`. Release build in `.github/workflows/build-apk.yml` is **unsigned**. Normal release has one launcher (Original), V2 Beta remains opt-in. Debug and isolated test APKs use **different application IDs**.
 - Historical isolated test APKs [#43124844965](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43124844965) and [#43259241007](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43259241007) were verified to have different package IDs and different debug signing certificate fingerprints. Their signing keys **cannot establish** a stable production update path. Which exact package/signature is installed on the user's phone is **NOT_VERIFIED**.
 - No production GitHub Release or approved long-lived production signing identity was found during this audit. Do not invent a signing key, owner or release channel.
+
+- **Post-PR #54 checkpoint:** [PR #54](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/54) is merged at `31e0d6dfee423d33f874892d9bf915b62c5d1aed`. Its full [CI #43401077651](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43401077651) passed at `db89621f0c6a581cf4265c567c9c2c8cceba36cc`; both commits have tree `068b64ee987bc2a8a590b46f831b2daf9d232030`. A new isolated APK artifact exists for **disposable phone review only**, package `com.blake.editor.test43401077651a1`, expires November 20, 2026. **No phone/device, upgrade, signer or backup PASS is recorded.**
 
 ## App-private data inventory (source-derived)
 
@@ -38,7 +40,7 @@ At `RecoveryDraftStore.kt` lines 414–417, an existing `filesDir/v2_recovery/le
 
 Never delete/rewrite the marker as an automatic fix. Never overwrite a V2 recovery record, including Trash and unsaved edits. The Original slot and V2 record have separate histories; their timestamps/revision numbers cannot safely establish which text should win.
 
-### Proposed opt-in reconciliation contract — design only, not implemented
+### Opt-in reconciliation contract — implemented in source, phone not tested
 
 1. **Detect read-only:** only when an import marker already exists, inspect Original's current committed text/metadata pair using the same rules as PR #49, honoring tombstones and errors. Compare stable document identity and exact content against V2 without changing either store.
 2. **Do not infer a winner:** show a difference as a reviewable **Original version** versus **V2 version**. A match requires no action. Do not silently replace a record, alter Trash, auto-import on startup, or reset the marker.
@@ -46,7 +48,7 @@ Never delete/rewrite the marker as an automatic fix. Never overwrite a V2 recove
 4. **Fail closed:** do not create a copy from deleted Original markers, incomplete/corrupt pairs, unreadable metadata or ambiguous identity. Explain the issue without deleting or rewriting anything. Prevent repeat taps from creating unintended duplicate copies.
 5. **Regression coverage before any implementation:** marker already present with identical/different text; V2 edited/trashed record; Original tombstone; corrupt/incomplete committed pair; linked URI copy disconnected from Save; duplicate confirmation; and unchanged source/marker/other V2 data. Add a user-visible confirmation and test it separately.
 
-This is a conservative **proposed interaction**, not approved migration behavior or a promise that an affected phone has been identified. Review the behavior before implementing an app-code PR.
+**Implementation now on `main`:** [PR #51](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/51) added historical-marker safety tests; [PR #52](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/52) added read-only comparison; [PR #53](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/53) added a guarded, explicit, unlinked recovery-copy API; [PR #54](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/54) added **V2 Beta Home → Review Original drafts**, side-by-side text previews and an explicit **Keep Original as separate copy** action. On merged PR #54, exact-head [full CI #43401077651](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43401077651) completed `success`; the tested/merged Git trees match. **Phone acceptance remains NOT_TESTED**, and no historical mismatch on Boss's actual installed app has been established. Do not interpret source implementation as permission for an automatic migration or signed production release. Follow the [disposable-phone acceptance plan](BLAKE_V2_PHASE_J_HISTORICAL_RECOVERY_PHONE_ACCEPTANCE.md).
 
 ## Android backup decision — no policy changed
 
@@ -76,7 +78,7 @@ Official references: [How Android app updates work](https://developer.android.co
 | Original session, draft text+metadata, deleted tombstones | NOT_TESTED | NOT_TESTED |
 | V2 recovery, Trash/Restore, hidden Recent, Untitled counter | NOT_TESTED | NOT_TESTED |
 | V2 first-time import from current Original slot format | Source fix in PR #49: full PR-head CI PASS; device NOT_TESTED | NOT_TESTED |
-| Historical previously marked V2 imports (opt-in reconciliation) | Design proposed; NOT_IMPLEMENTED / NOT_TESTED | NOT_TESTED |
+| Historical previously marked V2 imports (opt-in reconciliation) | PRs #52–#54 implemented a user-invoked review/copy flow; full head CI PASS; phone NOT_TESTED | NOT_TESTED |
 | Theme settings and app startup | NOT_TESTED | NOT_TESTED |
 | SAF persisted URI permission, Save As, encoding/BOM and conflict guard | NOT_TESTED | NOT_TESTED |
 | External files unchanged; >2 MiB reader stays read-only | NOT_TESTED | NOT_TESTED |
@@ -90,4 +92,4 @@ For each previously installed Blake app that might be updated, record **non-secr
 
 Only after a compatible installed identity, authorized long-lived signer, and safe disposable baseline are established should a **separately approved signed candidate** be prepared. Capture exact candidate commit, exact-head full CI, artifact SHA-256, package/signature/version and unchanged Original launcher; verify a disposable data-preserving in-place update and a **separate** cloud/device backup-restore path. Check Original session/draft pairs and tombstones, V2 recovery/Trash/counters, both save-backup directories, themes, SAF reauthorization, external file bytes, encoding, and the >2 MiB read-only guard. Stop rollout on any mismatch; never clear data, uninstall or force downgrade as rollback.
 
-**Next bounded engineering decision:** review the proposed opt-in historical reconciliation contract and the non-secret installed-package/signature evidence. Write a separate tested draft code PR only when that behavior is agreed and a concrete change is justified. **No Phase K release, Phase L closure, signing, or installation is authorized.**
+**Next bounded gate:** run the optional, isolated, disposable-phone acceptance checks for the now-implemented review/copy UI, then record the exact build and PASS/FAIL evidence in the [phone plan](BLAKE_V2_PHASE_J_HISTORICAL_RECOVERY_PHONE_ACCEPTANCE.md). Separately establish non-secret installed-package/signature evidence. The source is implemented but **phone NOT_TESTED**, signed upgrade **BLOCKED**, and cloud/device backup restore **NOT_TESTED**. **No Phase K release, Phase L closure, production signing, or installation is authorized by this documentation.**
