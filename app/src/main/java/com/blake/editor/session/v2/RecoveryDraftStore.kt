@@ -422,7 +422,12 @@ class RecoveryDraftStore(private val directory: File) {
         // Discover both old-format pairs and slot-only drafts. Uncommitted
         // orphan slots without a marker must not be silently marked imported.
         val slotName = Regex("""^(.+)\.(draft|meta)\.[01]$""")
-        val keys = legacyDirectory.listFiles { file -> file.isFile }.orEmpty()
+        val originalEntries = try {
+            if (legacyDirectory.exists()) legacyDirectory.listFiles() else emptyArray<File>()
+        } catch (_: SecurityException) {
+            null
+        } ?: return LegacyMigrationReport(0, 0, listOf(legacyDirectory.name), false)
+        val keys = originalEntries
             .mapNotNull { file ->
                 when {
                     file.name.endsWith(".active") -> file.name.removeSuffix(".active")
