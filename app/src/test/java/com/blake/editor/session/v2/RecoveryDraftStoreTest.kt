@@ -751,6 +751,84 @@ class RecoveryDraftStoreTest {
         assertEquals("linked unsaved changes", contentFile.readText())
     }
 
+    /**
+     * Existing migration markers can predate the committed Original slot format.
+     * Restart must not silently replace V2 edits with a newer Original snapshot.
+     * A future opt-in reconciliation must use a different, user-confirmed path.
+     */
+    @Test fun historicalImportMarkerPreservesV2EditsWhenOriginalSlotChanges() {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, null, "historical Original snapshot")
+        assertTrue(store.importLegacy(old).complete)
+
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+        val id = DocumentIdentity.legacyUntitled()
+        val originalV2 = store.load(id).getOrThrow()!!
+        val editedV2 = originalV2.copy(content = "independent V2 edits",
+            revision = originalV2.revision + 1)
+        store.save(editedV2).getOrThrow()
+
+        writeOriginalPair(old, "0", "newer Original committed text")
+        val source = File(old, "untitled.draft.0")
+        val sourceBytes = source.readBytes()
+        File(old, "untitled.active").writeText("0")
+
+        val reopened = RecoveryDraftStore(File(dir, "v2"))
+        val report = reopened.importLegacy(old)
+        assertTrue(report.complete)
+        assertEquals(0, report.imported)
+        assertEquals(0, report.alreadyPresent)
+        assertTrue(report.failedFiles.isEmpty())
+        assertEquals(editedV2, reopened.load(id).getOrThrow())
+        assertEquals(1, reopened.list().drafts.size)
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertTrue(sourceBytes.contentEquals(source.readBytes()))
+    }
+
+    @Test fun historicalImportMarkerNeverSilentlyImportsNewOriginalSlot() {
+        val old = File(dir, "drafts").apply { mkdirs() }
+        // Simulate a completed earlier import that found no Original draft.
+        assertTrue(store.importLegacy(old).complete)
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+
+        writeOriginalPair(old, "1", "Original appeared after V2 migration")
+        val source = File(old, "untitled.draft.1")
+        File(old, "untitled.active").writeText("1")
+
+        val report = RecoveryDraftStore(File(dir, "v2")).importLegacy(old)
+        assertTrue(report.complete)
+        assertEquals(0, report.imported)
+        assertTrue(report.failedFiles.isEmpty())
+        assertTrue(store.list().drafts.isEmpty())
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertEquals("Original appeared after V2 migration", source.readText())
+        assertEquals("1", File(old, "untitled.active").readText())
+    }
+
+    @Test fun historicalImportMarkerPreservesV2TrashAfterOriginalTombstone() {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, null, "old Original recovery")
+        assertTrue(store.importLegacy(old).complete)
+        val id = DocumentIdentity.legacyUntitled()
+        val existing = store.load(id).getOrThrow()!!
+        val trashed = store.moveToTrash(id, existing.revision).getOrThrow()
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+
+        // Original now considers the draft deleted, but the V2 Trash is distinct.
+        File(old, "untitled.active").writeText("deleted")
+        val report = RecoveryDraftStore(File(dir, "v2")).importLegacy(old)
+        assertTrue(report.complete)
+        assertEquals(0, report.imported)
+        assertEquals(trashed, store.load(id).getOrThrow())
+        assertEquals(listOf(trashed), store.list().drafts)
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertEquals("deleted", File(old, "untitled.active").readText())
+        assertEquals("old Original recovery", File(old, "untitled.draft").readText())
+    }
+
     @Test fun unreadableOriginalDirectoryCannotMarkMigrationComplete() {
         val invalid = File(dir, "drafts")
         invalid.writeText("not a directory")
