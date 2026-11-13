@@ -58,6 +58,31 @@ class SessionStoreTest {
     }
 
     @Test
+    fun testSavingAgainReplacesTheLegacySessionWithoutChangingTheFormat() = runBlocking {
+        val previous = EditorSession(
+            uri = null,
+            displayName = "old.txt",
+            syntaxMode = SyntaxMode.PLAIN_TEXT,
+            isDirty = true,
+            cursorLine = 4
+        )
+        assertTrue(store.saveSession(previous).isSuccess)
+
+        val updated = previous.copy(
+            displayName = "new.txt",
+            isDirty = false,
+            cursorLine = 30
+        )
+        assertTrue(store.saveSession(updated).isSuccess)
+
+        val restored = store.loadSession().getOrThrow()
+        assertNotNull(restored)
+        assertEquals("new.txt", restored!!.displayName)
+        assertFalse(restored.isDirty)
+        assertEquals(30, restored.cursorLine)
+    }
+
+    @Test
     fun testClearSession() = runBlocking {
         val session = EditorSession(
             uri = null,
