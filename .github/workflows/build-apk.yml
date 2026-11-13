@@ -211,6 +211,9 @@ jobs:
           test -n "$APK"
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.test${{ github.run_id }}a${{ github.run_attempt }}'"
+          # A build-specific launcher label lets Boss distinguish test installs.
+          LABEL="Blake T${GITHUB_RUN_ID: -6}a${GITHUB_RUN_ATTEMPT}"
+          "$AAPT" dump badging "$APK" | grep -F "label='$LABEL'"
 
       - name: Upload Isolated Test APK Artifact
         if: steps.scope.outputs.tier == 'full'
