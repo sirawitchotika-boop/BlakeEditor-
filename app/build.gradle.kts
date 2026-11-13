@@ -53,6 +53,12 @@ android {
         }
     }
 
+    // Debug launcher labels are generated at build time from the CI run ID.
+    // This enables resValue only; no release-only label resources are added.
+    buildFeatures {
+        resValues = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
