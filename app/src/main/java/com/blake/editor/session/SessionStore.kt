@@ -8,7 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.util.Properties
 
 class SessionStore(
@@ -22,7 +21,6 @@ class SessionStore(
 
     suspend fun saveSession(session: EditorSession): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            sessionFile.parentFile?.mkdirs()
             val props = Properties()
             props.setProperty("uri", session.uri?.toString() ?: "")
             props.setProperty("displayName", session.displayName)
@@ -32,7 +30,7 @@ class SessionStore(
             props.setProperty("cursorColumn", session.cursorColumn.toString())
             props.setProperty("scrollPosition", session.scrollPosition.toString())
 
-            FileOutputStream(sessionFile).use { out ->
+            AtomicPrivateFileWriter.write(sessionFile) { out ->
                 props.store(out, "Blake Editor Session State")
             }
             Unit
