@@ -829,6 +829,146 @@ class RecoveryDraftStoreTest {
         assertEquals("old Original recovery", File(old, "untitled.draft").readText())
     }
 
+    @Test fun historicalInspectionRequiresExistingImportMarkerAndNeverWritesIt() {
+        val original = File(dir, "drafts")
+        writeOriginalPair(original, null, "private Original text")
+        val bytes = File(original, "untitled.draft").readBytes()
+
+        assertTrue(store.inspectHistoricalImports(original).isFailure)
+        assertFalse(File(dir, "v2/legacy-imported.marker").exists())
+        assertTrue(bytes.contentEquals(File(original, "untitled.draft").readBytes()))
+        assertTrue(store.list().drafts.isEmpty())
+    }
+
+    @Test fun historicalInspectionComparesCommittedSlotAndKeepsBothDrafts() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+        val id = DocumentIdentity.legacyUntitled()
+        val v2 = draft(id, "independent V2 edit", 5)
+        store.save(v2).getOrThrow()
+
+        writeOriginalPair(original, null, "stale legacy")
+        writeOriginalPair(original, "1", "newer committed Original", "Original latest.txt")
+        File(original, "untitled.active").writeText("1")
+        val source = File(original, "untitled.draft.1")
+        val sourceBytes = source.readBytes()
+
+        val comparison = store.inspectHistoricalImports(original).getOrThrow()
+        assertEquals(1, comparison.size)
+        assertEquals(id, comparison.single().id)
+        assertEquals("Original latest.txt", comparison.single().originalDisplayName)
+        assertNull(comparison.single().originalSourceUri)
+        assertEquals("newer committed Original", comparison.single().originalContent)
+        assertEquals(v2, comparison.single().existingV2)
+        assertEquals(v2, store.load(id).getOrThrow())
+        assertEquals("stale legacy", File(original, "untitled.draft").readText())
+        assertTrue(sourceBytes.contentEquals(source.readBytes()))
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+    }
+
+    @Test fun historicalInspectionTreatsEqualTextAsNoDifferenceAndHonorsTombstone() {
+        val original = File(dir, "drafts")
+        writeOriginalPair(original, null, "same text")
+        assertTrue(store.importLegacy(original).complete)
+        val id = DocumentIdentity.legacyUntitled()
+        val old = store.load(id).getOrThrow()!!
+        val trashed = store.moveToTrash(id, old.revision).getOrThrow()
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+
+        assertTrue(store.inspectHistoricalImports(original).getOrThrow().isEmpty())
+        File(original, "untitled.active").writeText("deleted")
+        assertTrue(store.inspectHistoricalImports(original).getOrThrow().isEmpty())
+        assertEquals(trashed, store.load(id).getOrThrow())
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertEquals("same text", File(original, "untitled.draft").readText())
+    }
+
+    @Test fun historicalInspectionRejectsCorruptIncompleteAndOrphanedSlots() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+        writeOriginalPair(original, null, "legacy data")
+        File(original, "untitled.draft.0").writeText("unpublished")
+        assertTrue(store.inspectHistoricalImports(original).isFailure)
+
+        val active = File(original, "untitled.active")
+        active.writeText("corrupt")
+        assertTrue(store.inspectHistoricalImports(original).isFailure)
+        active.writeText("0")
+        assertTrue(store.inspectHistoricalImports(original).isFailure)
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertEquals("legacy data", File(original, "untitled.draft").readText())
+        assertEquals("unpublished", File(original, "untitled.draft.0").readText())
+        assertTrue(store.list().drafts.isEmpty())
+    }
+
+    @Test fun historicalInspectionIncludesLinkedUriWithoutWritingExternalDocument() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        val uri = "content://example.provider/document/42"
+        val id = DocumentIdentity.forUri(uri)
+        val key = id.value.removePrefix("uri-")
+        val props = Properties().apply {
+            setProperty("uri", uri)
+            setProperty("displayName", "linked.txt")
+            setProperty("syntaxMode", "PLAIN_TEXT")
+        }
+        File(original, "${key}.meta.0").outputStream().use { props.store(it, "Original") }
+        val textFile = File(original, "${key}.draft.0")
+        textFile.writeText("Original linked unsaved bytes")
+        val bytes = textFile.readBytes()
+        File(original, "${key}.active").writeText("0")
+        val v2 = RecoveryDraft(id, uri, "V2 linked", "PLAIN_TEXT", "V2 edits", revision = 6)
+        store.save(v2).getOrThrow()
+
+        val comparison = store.inspectHistoricalImports(original).getOrThrow()
+        assertEquals(1, comparison.size)
+        assertEquals(id, comparison.single().id)
+        assertEquals(uri, comparison.single().originalSourceUri)
+        assertEquals("Original linked unsaved bytes", comparison.single().originalContent)
+        assertEquals(v2, comparison.single().existingV2)
+        assertEquals(v2, store.load(id).getOrThrow())
+        assertTrue(bytes.contentEquals(textFile.readBytes()))
+    }
+
+    @Test fun historicalInspectionDoesNotHideCorruptV2Recovery() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "valid Original")
+        File(original, "untitled.active").writeText("0")
+        val id = DocumentIdentity.legacyUntitled()
+        val broken = File(dir, "v2/${id.value}.recovery")
+        broken.writeText("corrupt V2 record")
+        val brokenBytes = broken.readBytes()
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+
+        assertTrue(store.inspectHistoricalImports(original).isFailure)
+        assertTrue(brokenBytes.contentEquals(broken.readBytes()))
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+        assertEquals("valid Original", File(original, "untitled.draft.0").readText())
+    }
+
+    @Test fun historicalInspectionCanReportUnmatchedOriginalWithoutCreatingV2Copy() {
+        val original = File(dir, "drafts").apply { mkdirs() }
+        assertTrue(store.importLegacy(original).complete)
+        writeOriginalPair(original, "0", "original only")
+        File(original, "untitled.active").writeText("0")
+        val marker = File(dir, "v2/legacy-imported.marker")
+        val markerBytes = marker.readBytes()
+
+        val differences = store.inspectHistoricalImports(original).getOrThrow()
+        assertEquals(1, differences.size)
+        assertNull(differences.single().existingV2)
+        assertEquals("original only", differences.single().originalContent)
+        assertTrue(store.list().drafts.isEmpty())
+        assertTrue(markerBytes.contentEquals(marker.readBytes()))
+    }
+
     @Test fun unreadableOriginalDirectoryCannotMarkMigrationComplete() {
         val invalid = File(dir, "drafts")
         invalid.writeText("not a directory")
