@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Debug variants (including isolated CI builds) only. Release keeps Blake Editor. -->
+    <string name="app_name">Blake Editor Test</string>
+</resources>
