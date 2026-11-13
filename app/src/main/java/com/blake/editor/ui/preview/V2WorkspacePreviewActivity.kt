@@ -40,6 +40,7 @@ import com.blake.editor.file.EncodingDetection
 import com.blake.editor.file.TextEncodingCodec
 import com.blake.editor.file.TextFileEncoding
 import com.blake.editor.session.v2.DocumentIdentity
+import com.blake.editor.session.v2.HistoricalDraftDifference
 import com.blake.editor.session.v2.DraftWorkspace
 import com.blake.editor.session.v2.RecoveryDraft
 import com.blake.editor.session.v2.RecoveryDraftStore
@@ -274,6 +275,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
         controls(listOf(
             "New File" to { newFile() },
             "Open File" to { filePicker.launch(arrayOf("*/*")) },
+            "Review Original drafts" to { reviewOriginalDrafts() },
             "Settings" to { showEditorSettings() }
         ))
         // This selector is OUTSIDE the document ScrollView. Scrolling can never
@@ -349,6 +351,79 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 })
             }
         }
+    }
+
+    /**
+     * The user must tap Home > Review Original drafts to start this read-only scan.
+     * Never compare, replace or copy any historical draft on normal app startup.
+     */
+    private fun reviewOriginalDrafts() {
+        if (busy || active != null || viewingTrash) return
+        busy = true
+        lifecycleScope.launch {
+            val inspection = withContext(Dispatchers.IO) {
+                store.inspectHistoricalImports(File(filesDir, "drafts"))
+            }
+            busy = false
+            if (isFinishing || isDestroyed || active != null || viewingTrash) return@launch
+            if (inspection.isFailure) {
+                dialog("Original draft review unavailable",
+                    "The stored Original and V2 drafts could not be compared safely. " +
+                    "Nothing was changed. Keep both versions and try again after " +
+                    "checking recovery files.")
+                return@launch
+            }
+            val differences = inspection.getOrThrow()
+            if (differences.isEmpty()) {
+                dialog("No different Original drafts",
+                    "No different committed Original draft was found. No drafts " +
+                    "or external files were changed.")
+                return@launch
+            }
+            AlertDialog.Builder(this@V2WorkspacePreviewActivity)
+                .setTitle("Review Original drafts · Choose one")
+                .setItems(differences.map { HistoricalDraftReviewText.choiceLabel(it) }
+                    .toTypedArray()) { _, index ->
+                    showHistoricalDraftComparison(differences[index])
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
+    private fun showHistoricalDraftComparison(reviewed: HistoricalDraftDifference) {
+        if (busy || active != null || viewingTrash) return
+        AlertDialog.Builder(this)
+            .setTitle("Review Original and V2 text")
+            .setMessage(HistoricalDraftReviewText.details(reviewed))
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Keep Original as separate copy") { _, _ ->
+                if (busy || active != null || viewingTrash) return@setPositiveButton
+                busy = true
+                lifecycleScope.launch {
+                    // The store rechecks both versions under locks immediately
+                    // before copying. A stale review fails without altering data.
+                    val copied = withContext(Dispatchers.IO) {
+                        store.copyHistoricalOriginalAfterConfirmation(
+                            File(filesDir, "drafts"), reviewed, explicitlyConfirmed = true)
+                    }
+                    busy = false
+                    if (isFinishing || isDestroyed || active != null || viewingTrash) return@launch
+                    if (copied.isSuccess) {
+                        showHome()
+                        dialog("Separate recovery copy kept",
+                            "The full Original text is a new unlinked V2 recovery draft. " +
+                            "Your previous V2 draft, Trash, Original draft and real " +
+                            "files were not replaced. Use Save As when you want a file.")
+                    } else {
+                        dialog("No recovery copy created",
+                            "The reviewed Original or V2 version may have changed, " +
+                            "or a previous recovery copy was edited. Nothing was " +
+                            "overwritten. Open Review Original drafts again.")
+                    }
+                }
+            }
+            .show()
     }
 
     /** Pick saved-file shortcuts without removing a draft or changing file bytes. */
