@@ -2,13 +2,14 @@
 
 **Audit date:** 2026-11-13 (Asia/Bangkok)  
 **Project:** `sirawitchotika-boop/BlakeEditor-`  
-**Exact reviewed main:** `f4be4149bc7183ec5472e5d4d493691f9db02a07`  
-**Current gate:** **BLOCKED** for a signed production release. This is a read-only **source audit** recorded in a documentation-only draft PR; it does **not** approve signing, distribution, installation, merge, backup-policy changes or launcher promotion.
+**Original audit baseline:** `f4be4149bc7183ec5472e5d4d493691f9db02a07` (before PR #49)  
+**Refreshed source checkpoint (2026-11-13):** `6f1e5138299ee253bf613dc91e0f8ce41cfc1b3a` (after PR #49)  
+**Current gate:** **BLOCKED** for a signed production release. This document combines the earlier merged read-only audit with an updated source checkpoint. It does **not** approve signing, distribution, installation, merge, backup-policy changes, migration, or launcher promotion.
 
 ## Evidence and known results
 
 - Phase H accepted-main CI [#43259241007](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43259241007) passed on `6fc1b22...`. Phase I phone acceptance on that isolated debug build was **USER-REPORTED PASS**, not a signed upgrade test.
-- PRs [#45](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/45), [#46](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/46), and [#47](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/47) are merged. #47's accepted PR-head CI [#43381841942](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43381841942) passed at `e594c16aadc4a3ad842331d7a76792bf6549f7de`. Its Git tree `05391c29525c5d8a19f5d1b20c5f31597bb6a8ee` matches merged main `f4be4149...` exactly. **No separate exact merge-commit CI run** has been observed.
+- PRs [#45](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/45)–[#49](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/49) are merged. The PR #49 head `718e632010284a48519e9a0082ff6ef3e637bbd2` passed [full CI #43389867241](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43389867241). GitHub's commit objects show its Git tree `d11189cbf4b822c691feff188d5600505c692220` matches merged `main` `6f1e5138299ee253bf613dc91e0f8ce41cfc1b3a`. **No separate CI run on that merged commit** was observed. This is source/build evidence, not a device test or production signature.
 - Production application ID is `com.blake.editor`, `versionCode=1`, `versionName=0.1.0`. Release build in `.github/workflows/build-apk.yml` is **unsigned**. Normal release has one launcher (Original), V2 Beta remains opt-in. Debug and isolated test APKs use **different application IDs**.
 - Historical isolated test APKs [#43124844965](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43124844965) and [#43259241007](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43259241007) were verified to have different package IDs and different debug signing certificate fingerprints. Their signing keys **cannot establish** a stable production update path. Which exact package/signature is installed on the user's phone is **NOT_VERIFIED**.
 - No production GitHub Release or approved long-lived production signing identity was found during this audit. Do not invent a signing key, owner or release channel.
@@ -27,15 +28,25 @@
 
 **Important:** each isolated/debug test APK uses its own application ID and app-private sandbox. Merely installing a differently named test APK does **not** migrate its private drafts to `com.blake.editor`.
 
-## Confirmed source-level compatibility gap after PR #47
+## PR #49 resolved the first-import compatibility gap
 
-`FileDraftRepository.saveDraft()` now stores current Original content and metadata in alternating `.draft.0/.1` and `.meta.0/.1` slots and publishes `.active` only after both succeed. It intentionally leaves legacy pairs alone.
+**Historical finding, now fixed in source:** PR #47 changed Original drafts to alternating committed text/metadata pairs. The old V2 importer could read a stale legacy pair or miss a slot-only draft. [PR #49](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/49) updated `RecoveryDraftStore.importLegacy()` to read the currently committed Original pair, respect `.active=deleted`, refuse corrupt or incomplete committed pairs, and preserve every existing V2 record. Its nine focused regression tests and full PR-head CI passed. **The first-import source defect is no longer an open task.** Real-device import and upgrade behavior remain **NOT_TESTED**.
 
-However, `RecoveryDraftStore.importLegacy()`, invoked by `V2WorkspacePreviewActivity.onCreate()`, still lists only filenames ending in `.meta` and reads only the corresponding `.draft`. It does not resolve the new `.active` marker or slot pair.
+### Remaining risk: imports completed before PR #49
 
-**Risk:** if V2 performs its first Original-draft import after an Original save in the new format, it can miss that draft (when no legacy pair exists) or import **older** legacy content (when an old pair remains). It can then write `legacy-imported.marker`, preventing another automatic import. This is a source-supported migration gap, **not** proof that a phone lost data. Original's current pair stays in Original.
+At `RecoveryDraftStore.kt` lines 414–417, an existing `filesDir/v2_recovery/legacy-imported.marker` causes the importer to return without inspecting Original again. A user who opened V2 **before** PR #49 may have an old imported snapshot while Original retains a newer committed slot. This is a **possible historical mismatch**, not demonstrated loss of Original content or a confirmed affected phone.
 
-**Required before release:** a separate focused code/test PR makes V2 import the currently committed Original pair, respects `deleted` tombstones, fails closed on corruption/incomplete pairs, preserves original source files, and never overwrites an existing V2 recovery record. Include first-import, legacy-only, committed-slot, tombstone, and corrupt-marker tests. Do not change migration behavior in this documentation PR.
+Never delete/rewrite the marker as an automatic fix. Never overwrite a V2 recovery record, including Trash and unsaved edits. The Original slot and V2 record have separate histories; their timestamps/revision numbers cannot safely establish which text should win.
+
+### Proposed opt-in reconciliation contract — design only, not implemented
+
+1. **Detect read-only:** only when an import marker already exists, inspect Original's current committed text/metadata pair using the same rules as PR #49, honoring tombstones and errors. Compare stable document identity and exact content against V2 without changing either store.
+2. **Do not infer a winner:** show a difference as a reviewable **Original version** versus **V2 version**. A match requires no action. Do not silently replace a record, alter Trash, auto-import on startup, or reset the marker.
+3. **Recover only on explicit user action:** offer **Keep Original text as a separate recovery copy**, using a fresh untitled identity. The copy must not retain a live `sourceUri`, persisted document hash, or saved-to-disk state. Preserve existing V2 and Original records, external documents, SAF grants, and backup files. Do not treat the copy as saved to an external file.
+4. **Fail closed:** do not create a copy from deleted Original markers, incomplete/corrupt pairs, unreadable metadata or ambiguous identity. Explain the issue without deleting or rewriting anything. Prevent repeat taps from creating unintended duplicate copies.
+5. **Regression coverage before any implementation:** marker already present with identical/different text; V2 edited/trashed record; Original tombstone; corrupt/incomplete committed pair; linked URI copy disconnected from Save; duplicate confirmation; and unchanged source/marker/other V2 data. Add a user-visible confirmation and test it separately.
+
+This is a conservative **proposed interaction**, not approved migration behavior or a promise that an affected phone has been identified. Review the behavior before implementing an app-code PR.
 
 ## Android backup decision — no policy changed
 
@@ -64,7 +75,8 @@ Official references: [How Android app updates work](https://developer.android.co
 | --- | --- | --- |
 | Original session, draft text+metadata, deleted tombstones | NOT_TESTED | NOT_TESTED |
 | V2 recovery, Trash/Restore, hidden Recent, Untitled counter | NOT_TESTED | NOT_TESTED |
-| V2 import from current Original slot format | **KNOWN SOURCE GAP; fix first** | **KNOWN SOURCE GAP; fix first** |
+| V2 first-time import from current Original slot format | Source fix in PR #49: full PR-head CI PASS; device NOT_TESTED | NOT_TESTED |
+| Historical previously marked V2 imports (opt-in reconciliation) | Design proposed; NOT_IMPLEMENTED / NOT_TESTED | NOT_TESTED |
 | Theme settings and app startup | NOT_TESTED | NOT_TESTED |
 | SAF persisted URI permission, Save As, encoding/BOM and conflict guard | NOT_TESTED | NOT_TESTED |
 | External files unchanged; >2 MiB reader stays read-only | NOT_TESTED | NOT_TESTED |
@@ -72,5 +84,10 @@ Official references: [How Android app updates work](https://developer.android.co
 
 **Phase J exit:** not PASS until production signing ownership, exact signed candidate provenance and an observed data-preserving upgrade are recorded. Phase K release and launcher promotion remain **separate explicit approvals**.
 
-### One safe next work unit
-A **new, small draft code PR** to update the V2 Original-draft importer for PR #47's committed slot format, with failure/compatibility regression tests. Do not sign, merge, deploy or install as part of that work.
+### Next safe evidence gate (release still BLOCKED)
+
+For each previously installed Blake app that might be updated, record **non-secret** evidence: application ID, version name/code, public signing-certificate SHA-256, and install source when independently verifiable. A phone's App info screen may expose only a label and version; mark missing fields **UNKNOWN**, not guessed. Do not request private drafts, signing keys, passwords, exported app-private data, or an uninstall. An isolated `com.blake.editor.test...` APK cannot in-place upgrade production `com.blake.editor`.
+
+Only after a compatible installed identity, authorized long-lived signer, and safe disposable baseline are established should a **separately approved signed candidate** be prepared. Capture exact candidate commit, exact-head full CI, artifact SHA-256, package/signature/version and unchanged Original launcher; verify a disposable data-preserving in-place update and a **separate** cloud/device backup-restore path. Check Original session/draft pairs and tombstones, V2 recovery/Trash/counters, both save-backup directories, themes, SAF reauthorization, external file bytes, encoding, and the >2 MiB read-only guard. Stop rollout on any mismatch; never clear data, uninstall or force downgrade as rollback.
+
+**Next bounded engineering decision:** review the proposed opt-in historical reconciliation contract and the non-secret installed-package/signature evidence. Write a separate tested draft code PR only when that behavior is agreed and a concrete change is justified. **No Phase K release, Phase L closure, signing, or installation is authorized.**
