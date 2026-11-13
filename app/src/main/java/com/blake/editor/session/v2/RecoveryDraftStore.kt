@@ -81,6 +81,15 @@ data class LegacyMigrationReport(
     val complete: Boolean
 )
 
+data class HistoricalDraftDifference(
+    val id: DocumentIdentity,
+    val originalSourceUri: String?,
+    val originalDisplayName: String,
+    val originalContent: String,
+    val existingV2: RecoveryDraft?
+)
+
+
 class RecoveryDraftStore(private val directory: File) {
     private companion object {
         const val MAGIC = 0x424C4B32 // BLK2
@@ -391,6 +400,106 @@ class RecoveryDraftStore(private val directory: File) {
             if (old.revision != savedRevision) return@mutate false
             if (!fileFor(id).delete()) throw IOException("Could not delete saved recovery draft")
             true
+        }
+
+    /**
+     * Read-only comparison for a future user-invoked historical import review.
+     *
+     * An existing migration marker can be older than Original's committed-slot
+     * format. This method deliberately does not re-import, write a recovery
+     * record, reset the marker, or touch any Original draft. It is not called
+     * during normal startup and does not approve any automatic migration.
+     *
+     * A damaged source or recovery record fails the entire inspection instead
+     * of offering a potentially stale or incomplete version to the user.
+     */
+    fun inspectHistoricalImports(legacyDirectory: File): Result<List<HistoricalDraftDifference>> =
+        synchronized(recoveryMutationLock) {
+            synchronized(FileDraftRepository.draftMutationLock) {
+                runCatching {
+                    check(File(directory, LEGACY_MARKER).isFile) {
+                        "Original draft import has not been marked complete"
+                    }
+                    val entries = if (!legacyDirectory.exists()) {
+                        emptyArray<File>()
+                    } else {
+                        check(legacyDirectory.isDirectory) { "Original draft path is invalid" }
+                        legacyDirectory.listFiles()
+                            ?: error("Cannot inspect Original draft directory")
+                    }
+                    val slotName = Regex("""^(.+)\.(draft|meta)\.[01]$""")
+                    val keys = entries.mapNotNull { file ->
+                        when {
+                            file.name.endsWith(".active") -> file.name.removeSuffix(".active")
+                            file.name.endsWith(".draft") -> file.name.removeSuffix(".draft")
+                            file.name.endsWith(".meta") -> file.name.removeSuffix(".meta")
+                            else -> slotName.matchEntire(file.name)?.groupValues?.get(1)
+                        }
+                    }.distinct().sorted()
+
+                    keys.mapNotNull { key ->
+                        require(key.isNotEmpty()) { "Invalid Original draft key" }
+                        val activeMarker = File(legacyDirectory, "${key}.active")
+                        val slot = if (activeMarker.exists()) {
+                            check(activeMarker.isFile && activeMarker.length() <= 16L) {
+                                "Original draft marker is invalid"
+                            }
+                            when (val value = activeMarker.readText(Charsets.US_ASCII)) {
+                                "0", "1" -> value
+                                "deleted" -> return@mapNotNull null
+                                else -> error("Invalid Original draft marker: ${value.take(16)}")
+                            }
+                        } else {
+                            // An orphan slot may be a failed publish; never show stale
+                            // legacy bytes as though they were the committed version.
+                            check((0..1).none { slot ->
+                                File(legacyDirectory, "${key}.draft.$slot").exists() ||
+                                    File(legacyDirectory, "${key}.meta.$slot").exists()
+                            }) { "Uncommitted Original slot exists" }
+                            null
+                        }
+                        val suffix = if (slot == null) "" else ".$slot"
+                        val textFile = File(legacyDirectory, "${key}.draft$suffix")
+                        val metaFile = File(legacyDirectory, "${key}.meta$suffix")
+                        check(textFile.isFile && metaFile.isFile) {
+                            "Original committed draft pair is incomplete"
+                        }
+                        check(metaFile.length() <= MAX_METADATA_BYTES.toLong()) {
+                            "Original draft metadata is too large"
+                        }
+                        check(textFile.length() <= MAX_CONTENT_BYTES.toLong()) {
+                            "Original draft text is too large"
+                        }
+                        val meta = Properties()
+                        FileInputStream(metaFile).use(meta::load)
+                        val uri = meta.getProperty("uri", "").trim().ifBlank { null }
+                        val id = if (uri == null) {
+                            check(key == "untitled") { "Unknown Original draft key" }
+                            DocumentIdentity.legacyUntitled()
+                        } else {
+                            val linked = DocumentIdentity.forUri(uri)
+                            check(key == linked.value.removePrefix("uri-")) {
+                                "Original URI does not match draft key"
+                            }
+                            linked
+                        }
+                        val originalContent = textFile.readText(Charsets.UTF_8)
+                        val existingV2 = readDraftFile(id)
+                        if (existingV2?.content == originalContent) {
+                            null
+                        } else {
+                            HistoricalDraftDifference(
+                                id = id,
+                                originalSourceUri = uri,
+                                originalDisplayName = meta.getProperty("displayName", "Untitled")
+                                    .ifBlank { "Untitled" },
+                                originalContent = originalContent,
+                                existingV2 = existingV2
+                            )
+                        }
+                    }
+                }
+            }
         }
 
     /**
