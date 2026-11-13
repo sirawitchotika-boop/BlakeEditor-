@@ -6,6 +6,10 @@ import java.util.Properties
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import com.blake.editor.session.FileDraftRepository
+import com.blake.editor.core.model.EditorSession
+import com.blake.editor.core.model.SyntaxMode
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -580,5 +584,179 @@ class RecoveryDraftStoreTest {
         original.writeText("restored")
         assertTrue(store.importLegacy(old).complete)
         assertEquals("restored", store.list().drafts.single().content)
+    }
+
+    private fun writeOriginalPair(
+        directory: File,
+        slot: String?,
+        text: String,
+        name: String = "Original.txt",
+        cursorColumn: Int = 2
+    ) {
+        directory.mkdirs()
+        val suffix = if (slot == null) "" else ".${slot}"
+        File(directory, "untitled.draft${suffix}").writeText(text, Charsets.UTF_8)
+        val props = Properties().apply {
+            setProperty("uri", "")
+            setProperty("displayName", name)
+            setProperty("syntaxMode", "PLAIN_TEXT")
+            setProperty("cursorLine", "1")
+            setProperty("cursorColumn", cursorColumn.toString())
+        }
+        File(directory, "untitled.meta${suffix}").outputStream().use {
+            props.store(it, "Original draft")
+        }
+    }
+
+    @Test fun importsActualCommittedOriginalSlotWithoutUsingStaleLegacyPair() = runBlocking {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, null, "stale legacy", "stale.txt")
+        val initialMeta = File(old, "untitled.meta").readBytes()
+        val original = FileDraftRepository(baseDir = old)
+        val session = EditorSession(null, "live.txt", SyntaxMode.PLAIN_TEXT, true,
+            cursorLine = 1, cursorColumn = 6)
+        assertTrue(original.saveDraft(session, "first committed").isSuccess)
+        assertTrue(original.saveDraft(session.copy(displayName = "latest.txt", cursorColumn = 9),
+            "latest committed").isSuccess)
+        assertEquals("1", File(old, "untitled.active").readText())
+
+        val report = store.importLegacy(old)
+        assertTrue(report.complete)
+        assertEquals(1, report.imported)
+        val restored = store.list().drafts.single()
+        assertEquals("latest committed", restored.content)
+        assertEquals("latest.txt", restored.displayName)
+        assertEquals(8, restored.selectionStart)
+        assertEquals("stale legacy", File(old, "untitled.draft").readText())
+        assertTrue(initialMeta.contentEquals(File(old, "untitled.meta").readBytes()))
+    }
+
+    @Test fun committedSlotZeroImportsWhenNoLegacyPairExists() {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, "0", "only committed", "slot-zero.txt")
+        File(old, "untitled.active").writeText("0")
+
+        val result = store.importLegacy(old)
+        assertTrue(result.complete)
+        assertEquals(1, result.imported)
+        assertEquals("only committed", store.list().drafts.single().content)
+        assertEquals("slot-zero.txt", store.list().drafts.single().displayName)
+    }
+
+    @Test fun deletedOriginalTombstoneSkipsAllStalePairs() {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, null, "old legacy")
+        writeOriginalPair(old, "0", "old committed")
+        File(old, "untitled.active").writeText("deleted")
+
+        val result = store.importLegacy(old)
+        assertTrue(result.complete)
+        assertEquals(0, result.imported)
+        assertTrue(store.list().drafts.isEmpty())
+        assertEquals("deleted", File(old, "untitled.active").readText())
+        assertEquals("old legacy", File(old, "untitled.draft").readText())
+    }
+
+    @Test fun corruptMarkerBlocksLegacyFallbackAndAllowsRetryAfterRepair() {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, null, "stale legacy")
+        writeOriginalPair(old, "1", "new real content")
+        val marker = File(old, "untitled.active")
+        marker.writeText("corrupted")
+
+        val failed = store.importLegacy(old)
+        assertFalse(failed.complete)
+        assertEquals(listOf("untitled"), failed.failedFiles)
+        assertTrue(store.list().drafts.isEmpty())
+        assertFalse(File(dir, "v2/legacy-imported.marker").exists())
+        assertEquals("stale legacy", File(old, "untitled.draft").readText())
+
+        marker.writeText("1")
+        val retried = store.importLegacy(old)
+        assertTrue(retried.complete)
+        assertEquals("new real content", store.list().drafts.single().content)
+    }
+
+    @Test fun incompleteCommittedPairNeverImportsOlderLegacyAndCanRetry() {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, null, "stale legacy")
+        File(old, "untitled.draft.0").writeText("new partial")
+        File(old, "untitled.active").writeText("0")
+        val first = store.importLegacy(old)
+        assertFalse(first.complete)
+        assertTrue(store.list().drafts.isEmpty())
+        assertFalse(File(dir, "v2/legacy-imported.marker").exists())
+
+        writeOriginalPair(old, "0", "completed current")
+        val retried = store.importLegacy(old)
+        assertTrue(retried.complete)
+        assertEquals("completed current", store.list().drafts.single().content)
+    }
+
+    @Test fun unfinishedUncommittedSlotWithoutLegacyStaysRetryable() {
+        val old = File(dir, "drafts")
+        old.mkdirs()
+        File(old, "untitled.draft.0").writeText("unpublished")
+        val first = store.importLegacy(old)
+        assertFalse(first.complete)
+        assertEquals(listOf("untitled"), first.failedFiles)
+        assertFalse(File(dir, "v2/legacy-imported.marker").exists())
+
+        writeOriginalPair(old, "0", "committed")
+        File(old, "untitled.active").writeText("0")
+        assertTrue(store.importLegacy(old).complete)
+        assertEquals("committed", store.list().drafts.single().content)
+    }
+
+    @Test fun existingV2RecoveryNeverOverwrittenByOriginalSlotImport() {
+        val old = File(dir, "drafts")
+        writeOriginalPair(old, "1", "Original content")
+        File(old, "untitled.active").writeText("1")
+        val id = DocumentIdentity.legacyUntitled()
+        val existing = RecoveryDraft(id, null, "V2 edit", "PLAIN_TEXT",
+            "keep V2 content", revision = 7)
+        store.save(existing).getOrThrow()
+
+        val result = store.importLegacy(old)
+        assertTrue(result.complete)
+        assertEquals(0, result.imported)
+        assertEquals(1, result.alreadyPresent)
+        assertEquals(existing, store.load(id).getOrThrow())
+        assertEquals("Original content", File(old, "untitled.draft.1").readText())
+    }
+
+    @Test fun committedLinkedDocumentKeepsUriAndDoesNotTouchExternalBytes() {
+        val old = File(dir, "drafts").apply { mkdirs() }
+        val uri = "content://example.provider/document/42"
+        val key = DocumentIdentity.forUri(uri).value.removePrefix("uri-")
+        val contentFile = File(old, "${key}.draft.1")
+        contentFile.writeText("linked unsaved changes")
+        val props = Properties().apply {
+            setProperty("uri", uri)
+            setProperty("displayName", "linked.txt")
+            setProperty("syntaxMode", "KOTLIN")
+            setProperty("cursorLine", "1")
+            setProperty("cursorColumn", "5")
+        }
+        File(old, "${key}.meta.1").outputStream().use { props.store(it, "Original") }
+        File(old, "${key}.active").writeText("1")
+
+        val result = store.importLegacy(old)
+        assertTrue(result.complete)
+        val imported = store.load(DocumentIdentity.forUri(uri)).getOrThrow()!!
+        assertEquals(uri, imported.sourceUri)
+        assertEquals("linked unsaved changes", imported.content)
+        assertEquals("linked.txt", imported.displayName)
+        assertEquals(4, imported.selectionStart)
+        assertEquals("linked unsaved changes", contentFile.readText())
+    }
+
+    @Test fun unreadableOriginalDirectoryCannotMarkMigrationComplete() {
+        val invalid = File(dir, "drafts")
+        invalid.writeText("not a directory")
+        val result = store.importLegacy(invalid)
+        assertFalse(result.complete)
+        assertTrue(result.failedFiles.isNotEmpty())
+        assertFalse(File(dir, "v2/legacy-imported.marker").exists())
     }
 }
