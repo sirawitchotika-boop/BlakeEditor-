@@ -724,4 +724,39 @@ class RecoveryDraftStoreTest {
         assertEquals(existing, store.load(id).getOrThrow())
         assertEquals("Original content", File(old, "untitled.draft.1").readText())
     }
+
+    @Test fun committedLinkedDocumentKeepsUriAndDoesNotTouchExternalBytes() {
+        val old = File(dir, "drafts").apply { mkdirs() }
+        val uri = "content://example.provider/document/42"
+        val key = DocumentIdentity.forUri(uri).value.removePrefix("uri-")
+        val contentFile = File(old, "${key}.draft.1")
+        contentFile.writeText("linked unsaved changes")
+        val props = Properties().apply {
+            setProperty("uri", uri)
+            setProperty("displayName", "linked.txt")
+            setProperty("syntaxMode", "KOTLIN")
+            setProperty("cursorLine", "1")
+            setProperty("cursorColumn", "5")
+        }
+        File(old, "${key}.meta.1").outputStream().use { props.store(it, "Original") }
+        File(old, "${key}.active").writeText("1")
+
+        val result = store.importLegacy(old)
+        assertTrue(result.complete)
+        val imported = store.load(DocumentIdentity.forUri(uri)).getOrThrow()!!
+        assertEquals(uri, imported.sourceUri)
+        assertEquals("linked unsaved changes", imported.content)
+        assertEquals("linked.txt", imported.displayName)
+        assertEquals(4, imported.selectionStart)
+        assertEquals("linked unsaved changes", contentFile.readText())
+    }
+
+    @Test fun unreadableOriginalDirectoryCannotMarkMigrationComplete() {
+        val invalid = File(dir, "drafts")
+        invalid.writeText("not a directory")
+        val result = store.importLegacy(invalid)
+        assertFalse(result.complete)
+        assertTrue(result.failedFiles.isNotEmpty())
+        assertFalse(File(dir, "v2/legacy-imported.marker").exists())
+    }
 }
