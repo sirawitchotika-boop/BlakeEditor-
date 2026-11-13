@@ -381,9 +381,7 @@ class V2WorkspacePreviewActivity : AppCompatActivity() {
                 return@launch
             }
             AlertDialog.Builder(this@V2WorkspacePreviewActivity)
-                .setTitle("Review Original drafts")
-                .setMessage("Select a draft to compare. Viewing does not change files. " +
-                    "A separate recovery copy requires confirmation.")
+                .setTitle("Review Original drafts · Choose one")
                 .setItems(differences.map { HistoricalDraftReviewText.choiceLabel(it) }
                     .toTypedArray()) { _, index ->
                     showHistoricalDraftComparison(differences[index])
