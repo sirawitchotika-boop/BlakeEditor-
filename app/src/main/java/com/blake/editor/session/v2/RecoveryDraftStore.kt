@@ -11,6 +11,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Properties
+import com.blake.editor.session.FileDraftRepository
 
 /**
  * New document-scoped recovery API. Separate from the existing FileDraftRepository,
@@ -393,28 +394,70 @@ class RecoveryDraftStore(private val directory: File) {
         }
 
     /**
-     * One-time, non-destructive import from the V1 directory. V1 files are
-     * never deleted and a partially failed import can be safely retried.
+     * Non-destructive, one-time import of Original's currently committed draft.
      *
-     * Call this once when the V2 home/document manager becomes active.
-     * It is intentionally not invoked by the existing app.
+     * Original used <key>.draft/.meta before two-slot draft commits. Newer
+     * builds publish <key>.active only after both slot files are complete.
+     * Never read an inactive slot, a deleted draft, or stale legacy bytes
+     * when a committed marker exists. Preserve Original files on all paths.
+     *
+     * Both locks are process-local. This cannot promise cross-process
+     * consistency or atomic Android cloud-backup snapshots.
      */
-    fun importLegacy(legacyDirectory: File): LegacyMigrationReport = synchronized(recoveryMutationLock) {
+    fun importLegacy(legacyDirectory: File): LegacyMigrationReport =
+        synchronized(recoveryMutationLock) {
+            synchronized(FileDraftRepository.draftMutationLock) {
+                importCommittedOriginal(legacyDirectory)
+            }
+        }
+
+    private fun importCommittedOriginal(legacyDirectory: File): LegacyMigrationReport {
         if (File(directory, LEGACY_MARKER).exists()) {
-            return@synchronized LegacyMigrationReport(0, 0, emptyList(), true)
+            return LegacyMigrationReport(0, 0, emptyList(), true)
         }
         var imported = 0
         var alreadyPresent = 0
         val failures = mutableListOf<String>()
-        val metadataFiles = legacyDirectory.listFiles { file ->
-            file.isFile && file.name.endsWith(".meta")
-        }.orEmpty()
 
-        for (metaFile in metadataFiles) {
+        // Discover both old-format pairs and slot-only drafts. Uncommitted
+        // orphan slots without a marker must not be silently marked imported.
+        val slotName = Regex("""^(.+)\.(draft|meta)\.[01]$""")
+        val keys = legacyDirectory.listFiles { file -> file.isFile }.orEmpty()
+            .mapNotNull { file ->
+                when {
+                    file.name.endsWith(".active") -> file.name.removeSuffix(".active")
+                    file.name.endsWith(".draft") -> file.name.removeSuffix(".draft")
+                    file.name.endsWith(".meta") -> file.name.removeSuffix(".meta")
+                    else -> slotName.matchEntire(file.name)?.groupValues?.get(1)
+                }
+            }
+            .distinct()
+            .sorted()
+
+        for (legacyKey in keys) {
             try {
-                val legacyKey = metaFile.name.removeSuffix(".meta")
-                val contentFile = File(legacyDirectory, "$legacyKey.draft")
-                require(contentFile.isFile) { "Legacy content missing" }
+                require(legacyKey.isNotEmpty()) { "Missing Original draft key" }
+                val marker = File(legacyDirectory, "${legacyKey}.active")
+                val slot = if (marker.exists()) {
+                    require(marker.isFile) { "Original draft marker is not a file" }
+                    when (val value = marker.readText(Charsets.US_ASCII)) {
+                        "0", "1" -> value
+                        "deleted" -> continue // Do not resurrect cleared drafts.
+                        else -> error("Invalid Original draft commit marker")
+                    }
+                } else null
+
+                val contentFile = File(
+                    legacyDirectory,
+                    if (slot == null) "${legacyKey}.draft" else "${legacyKey}.draft.${slot}"
+                )
+                val metaFile = File(
+                    legacyDirectory,
+                    if (slot == null) "${legacyKey}.meta" else "${legacyKey}.meta.${slot}"
+                )
+                require(metaFile.isFile && contentFile.isFile) {
+                    "Current Original draft text/metadata pair is incomplete"
+                }
 
                 val properties = Properties()
                 FileInputStream(metaFile).use(properties::load)
@@ -432,15 +475,15 @@ class RecoveryDraftStore(private val directory: File) {
 
                 if (readDraftFile(id) != null) {
                     alreadyPresent++
-                    continue
+                    continue // Never overwrite an existing V2 recovery revision.
                 }
                 require(contentFile.length() <= MAX_CONTENT_BYTES.toLong()) {
-                    "Legacy content too large"
+                    "Original draft content too large"
                 }
-                val content = contentFile.readText(Charsets.UTF_8)
+                val draftContent = contentFile.readText(Charsets.UTF_8)
                 val line = properties.getProperty("cursorLine", "1").toIntOrNull() ?: 1
                 val column = properties.getProperty("cursorColumn", "1").toIntOrNull() ?: 1
-                val position = legacyPosition(content, line, column)
+                val position = legacyPosition(draftContent, line, column)
                 val scroll = (properties.getProperty("scrollPosition", "0").toIntOrNull() ?: 0)
                     .coerceAtLeast(0)
                 val recovered = RecoveryDraft(
@@ -449,7 +492,7 @@ class RecoveryDraftStore(private val directory: File) {
                     displayName = properties.getProperty("displayName", "Untitled")
                         .ifBlank { "Untitled" },
                     language = properties.getProperty("syntaxMode", "PLAIN_TEXT"),
-                    content = content,
+                    content = draftContent,
                     selectionStart = position,
                     selectionEnd = position,
                     scrollY = scroll,
@@ -458,20 +501,20 @@ class RecoveryDraftStore(private val directory: File) {
                 save(recovered).getOrThrow()
                 imported++
             } catch (_: Exception) {
-                // Never delete the V1 originals, even when one entry is invalid.
-                failures.add(metaFile.name)
+                // No file was deleted. Leave the migration marker absent so a
+                // repaired pair can be retried without hiding any draft.
+                failures.add(legacyKey)
             }
         }
 
-        val finished = failures.isEmpty()
-        if (finished) {
+        if (failures.isEmpty()) {
             try {
                 atomicWrite(File(directory, LEGACY_MARKER), byteArrayOf(1))
             } catch (_: Exception) {
                 failures.add(LEGACY_MARKER)
             }
         }
-        LegacyMigrationReport(imported, alreadyPresent, failures, failures.isEmpty())
+        return LegacyMigrationReport(imported, alreadyPresent, failures, failures.isEmpty())
     }
 
     private fun legacyPosition(content: String, line: Int, column: Int): Int {
