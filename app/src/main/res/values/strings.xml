@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Blake Editor</string>
+    <string name="app_name">Blake Personal</string>
     <string name="welcome_placeholder">Blake Editor   Phase 8 Ready</string>
     <string name="action_new">New</string>
     <string name="action_open">Open</string>

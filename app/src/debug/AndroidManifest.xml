@@ -1,31 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <!-- Debug-only override of the Original launcher label. -->
+        <!-- Personal debug builds expose only Original as a launcher.
+             V2 remains opt-in inside Original; Input Lab code is retained
+             for diagnostics without adding another launcher icon. -->
         <activity
             android:name=".ui.main.MainActivity"
             android:label="@string/blake_debug_editor_label" />
         <activity
             android:name=".ui.lab.InputLabActivity"
-            android:exported="true"
+            android:exported="false"
             android:label="@string/blake_debug_input_label"
-            android:theme="@style/Theme.BlakePreview">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-        <!-- Debug launcher alias only. Target Activity stays internal in the
-             regular app and its XML declaration lives in main. -->
-        <activity-alias
-            android:name=".ui.preview.V2WorkspaceDebugLauncher"
-            android:targetActivity=".ui.preview.V2WorkspacePreviewActivity"
-            android:exported="true"
-            android:label="@string/blake_debug_v2_label">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
+            android:theme="@style/Theme.BlakePreview" />
     </application>
 </manifest>
