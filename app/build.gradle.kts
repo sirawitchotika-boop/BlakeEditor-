@@ -7,7 +7,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.blake.editor"
+        applicationId = "com.blake.editor.personal"
         minSdk = 28
         targetSdk = 36
         versionCode = 1
@@ -27,7 +27,7 @@ android {
         debug {
             // Optional side-by-side phone-test build. Never replace the
             // installed original or normal debug app when signing keys differ.
-            // Standard debug remains com.blake.editor.debug.
+            // Standard debug remains com.blake.editor.personal.debug.
             // A unique ID per CI run prevents the next test APK from
             // colliding with a differently signed isolated app on the phone.
             // Preserve the existing .isolatedtest fallback for older builds.
@@ -47,7 +47,7 @@ android {
                 ?.let { Regex("""^\.test([0-9]+)a([0-9]+)$""").matchEntire(it) }
                 ?.let { "T${it.groupValues[1].takeLast(6)}a${it.groupValues[2]}" }
                 ?: "Debug"
-            resValue("string", "blake_debug_editor_label", "Blake $isolatedRunTag")
+            resValue("string", "blake_debug_editor_label", "Personal $isolatedRunTag")
             resValue("string", "blake_debug_v2_label", "V2 $isolatedRunTag")
             resValue("string", "blake_debug_input_label", "Input $isolatedRunTag")
         }

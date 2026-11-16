@@ -166,6 +166,7 @@ jobs:
             exit 1
           fi
           "$AAPT" dump badging "$APK" > release-badging.txt
+          grep -F "application-label:'Blake Personal'" release-badging.txt
           test "$(grep -c '^launchable-activity:' release-badging.txt)" -eq 1
           # Check activity attributes in the compiled release manifest, not
           # just in the source XML; both V2 entrypoints must be non-exported.
@@ -210,10 +211,12 @@ jobs:
           APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
           test -n "$APK"
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
-          "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.test${{ github.run_id }}a${{ github.run_attempt }}'"
+          "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.personal.test${{ github.run_id }}a${{ github.run_attempt }}'"
           # A build-specific launcher label lets Boss distinguish test installs.
-          LABEL="Blake T${GITHUB_RUN_ID: -6}a${GITHUB_RUN_ATTEMPT}"
+          LABEL="Personal T${GITHUB_RUN_ID: -6}a${GITHUB_RUN_ATTEMPT}"
           "$AAPT" dump badging "$APK" | grep -F "label='$LABEL'"
+          "$AAPT" dump badging "$APK" | grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'"
+          test "$("$AAPT" dump badging "$APK" | grep -c '^launchable-activity:')" -eq 1
 
       - name: Upload Isolated Test APK Artifact
         if: steps.scope.outputs.tier == 'full'
