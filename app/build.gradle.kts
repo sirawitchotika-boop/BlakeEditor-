@@ -2,6 +2,26 @@ plugins {
     id("com.android.application")
 }
 
+// A personal release is signed only by an explicit, separate private build.
+// Normal PR CI and unsigned release checks never load signing credentials.
+val blakePersonalSign = providers.gradleProperty("blakePersonalSign").orNull == "true"
+val blakeSigningInputs: Map<String, String?> = if (blakePersonalSign) {
+    mapOf(
+        "BLAKE_PERSONAL_KEYSTORE_PATH" to providers.environmentVariable("BLAKE_PERSONAL_KEYSTORE_PATH").orNull,
+        "BLAKE_PERSONAL_STORE_PASSWORD" to providers.environmentVariable("BLAKE_PERSONAL_STORE_PASSWORD").orNull,
+        "BLAKE_PERSONAL_KEY_ALIAS" to providers.environmentVariable("BLAKE_PERSONAL_KEY_ALIAS").orNull,
+        "BLAKE_PERSONAL_KEY_PASSWORD" to providers.environmentVariable("BLAKE_PERSONAL_KEY_PASSWORD").orNull,
+    )
+} else {
+    emptyMap()
+}
+if (blakePersonalSign) {
+    val missing = blakeSigningInputs.filterValues { it.isNullOrBlank() }.keys
+    require(missing.isEmpty()) {
+        "Personal release signing was requested but inputs are missing: ${missing.joinToString(", ")}"
+    }
+}
+
 android {
     namespace = "com.blake.editor"
     compileSdk = 37
@@ -16,8 +36,23 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (blakePersonalSign) {
+            create("personalRelease") {
+                storeFile = file(blakeSigningInputs.getValue("BLAKE_PERSONAL_KEYSTORE_PATH")!!)
+                storePassword = blakeSigningInputs.getValue("BLAKE_PERSONAL_STORE_PASSWORD")
+                keyAlias = blakeSigningInputs.getValue("BLAKE_PERSONAL_KEY_ALIAS")
+                keyPassword = blakeSigningInputs.getValue("BLAKE_PERSONAL_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // Do not enable signing for ordinary PR, debug, or unsigned builds.
+            if (blakePersonalSign) {
+                signingConfig = signingConfigs.getByName("personalRelease")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

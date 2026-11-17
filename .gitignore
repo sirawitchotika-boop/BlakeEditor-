@@ -13,3 +13,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+# Never commit private app-signing keys or certificates with private keys.
+*.jks
+*.keystore
+*.p12
+*.pfx
