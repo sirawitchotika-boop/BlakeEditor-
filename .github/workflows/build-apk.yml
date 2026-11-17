@@ -166,6 +166,7 @@ jobs:
             exit 1
           fi
           "$AAPT" dump badging "$APK" > release-badging.txt
+          grep -F "package: name='com.blake.editor.personal'" release-badging.txt
           grep -F "application-label:'Blake Personal'" release-badging.txt
           test "$(grep -c '^launchable-activity:' release-badging.txt)" -eq 1
           # Check activity attributes in the compiled release manifest, not
@@ -197,6 +198,29 @@ jobs:
           "$AAPT" list "$APK" | grep -Fx 'assets/reader/index.html'
           "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.js'
           "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.css'
+
+      # The release build above is UNSIGNED. Upload one clearly named file
+      # for an owner-controlled, offline signing step on Android. Do this
+      # before isolated-test Gradle 'clean' removes release outputs.
+      - name: Stage Blake Personal unsigned APK
+        if: steps.scope.outputs.tier == 'full'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t candidates < <(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*-unsigned.apk' -print)
+          test "${#candidates[@]}" -eq 1
+          mkdir -p blake-personal-output
+          cp -- "${candidates[0]}" blake-personal-output/BlakePersonal-UNSIGNED.apk
+          sha256sum blake-personal-output/BlakePersonal-UNSIGNED.apk
+
+      - name: Upload Blake Personal UNSIGNED APK (do not install)
+        if: steps.scope.outputs.tier == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: BlakePersonal-UNSIGNED-SIGN-FIRST
+          path: blake-personal-output/BlakePersonal-UNSIGNED.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build Side-by-Side Isolated Test APK
         if: steps.scope.outputs.tier == 'full'
