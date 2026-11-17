@@ -4,7 +4,7 @@
 
 Blake Editor keeps the existing **Original** editor as the regular app launcher. Blake 2.0 Beta is available by an intentional in-app action; it has **not** replaced the Original launcher. The project supports native Android typing, syntax-aware code editing, Markdown preview, draft recovery, safe document saving and read-only opening of large external files.
 
-> **Project status — November 12, 2026:** The reviewed Blake 2.0 feature integration ([PR #34](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/34)) and six-phase documentation ([PR #31](https://github.com/sirawitchotika-boop/BlakeEditor-/pull/31)) are merged into `main`. The user reported passing the A–F isolated-phone checklist. This is **not** evidence of a signed production update or a published release. The next steps are documented in [the G–L closeout roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md).
+> **Current personal-app milestone — November 17, 2026:** Blake Personal (`com.blake.editor.personal`, version `0.1.0` / code `1`) was privately signed on Boss's phone and installed alongside older apps. Boss reported that the signing record matched, installation and launch passed, and all six short acceptance tests passed. Original remains the **one launcher**; V2 is opt-in. This is a **user-reported private phone install**, not a GitHub/Store release or a tested in-place upgrade. See [Blake Personal phone closeout and recovery](docs/BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md) and [private-signing safety guide](docs/BLAKE_PERSONAL_SIGNING_READINESS.md). The separate [G–L roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) remains a planning record; its broader gates must not be inferred complete.
 
 ## Start here
 
@@ -16,7 +16,8 @@ Blake Editor keeps the existing **Original** editor as the regular app launcher.
 | Recovery and draft persistence | [`session/v2/`](app/src/main/java/com/blake/editor/session/v2/) |
 | File reading, encoding and SAF | [`file/`](app/src/main/java/com/blake/editor/file/) |
 | CI / test APKs | [Build Debug APK workflow](.github/workflows/build-apk.yml) |
-| Release and closeout plan | [G–L roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) |
+| Blake Personal installation and safe restart | [2026-11-17 phone closeout](docs/BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md) · [signing safety](docs/BLAKE_PERSONAL_SIGNING_READINESS.md) |
+| Broader V2 release and closeout plan | [G–L roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) |
 | Cross-chat automation and CI budget | [Project automation workflow](docs/BLAKE_V2_AUTOMATION_WORKFLOW.md) · [Live checkpoint](docs/BLAKE_V2_AUTOMATION_CHECKPOINT.md) |
 
 ## What the app does
@@ -140,6 +141,8 @@ BlakeEditor-/
 │           │   └── ui/{lab,main,preview}/
 │           └── js/editor-host-input-regression.test.cjs
 └── docs/
+    ├── BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md # Personal install and recovery
+    ├── BLAKE_PERSONAL_SIGNING_READINESS.md # Signing and upgrade safety
     ├── BLAKE_V2_CLOSEOUT_ROADMAP.md     # G–L plan and closure checklist
     ├── BLAKE_V2_REMAINING_WORK_PLAN.md   # Historic A–F plan
     ├── BLAKE_V2_SIX_PHASE_AGENT_RUNBOOK.md
@@ -166,7 +169,7 @@ BlakeEditor-/
 
 ## Build settings and dependencies
 
-Values below were read from the Gradle files on `main` on **November 12, 2026**. This is the declared dependency list, not a software bill of materials with resolved transitive packages.
+Values below were rechecked against Gradle on `main` on **November 17, 2026**. This is the declared dependency list, not a software bill of materials with resolved transitive packages.
 
 | Item | Declared value |
 | --- | --- |
@@ -174,10 +177,10 @@ Values below were read from the Gradle files on `main` on **November 12, 2026**.
 | Gradle distribution | `9.6.0` |
 | Java source / target | `17` |
 | Android compile / target / minimum SDK | `37` / `36` / `28` |
-| Application namespace and release ID | `com.blake.editor` |
+| Android namespace / Blake Personal release ID | `com.blake.editor` / `com.blake.editor.personal` |
 | Current Gradle versionName / versionCode | `0.1.0` / `1` — **not** a published release claim |
-| Default debug application ID | `com.blake.editor.debug` |
-| Per-run isolated debug ID | `com.blake.editor.test<run_id>a<attempt>` |
+| Default debug application ID | `com.blake.editor.personal.debug` |
+| Per-run isolated debug ID | `com.blake.editor.personal.test<run_id>a<attempt>` |
 
 **Android dependencies** (from `app/build.gradle.kts`):
 
@@ -200,7 +203,7 @@ Values below were read from the Gradle files on `main` on **November 12, 2026**.
 - marked `18.0.7`, from jsDelivr.
 - DOMPurify `3.4.15`, from cdnjs.
 
-Some checked-in `assets/editor/vendor/` files are small placeholders. **CI downloads the full vendor assets before building.** A local build must provision the same assets to match CI. Checksums are not yet pinned; dependency integrity review remains in Phase H.
+Some checked-in `assets/editor/vendor/` files are small placeholders. **CI downloads the full vendor assets before building.** A local build must provision the same assets to match CI. CI uses pinned-download integrity verification via `scripts/verified_vendor_assets.py`; broader audits follow their separate G–L gates.
 
 ## Building and testing
 
@@ -211,9 +214,10 @@ Some checked-in `assets/editor/vendor/` files are small placeholders. **CI downl
 3. Check the run's **conclusion** and its **exact head commit**.
 4. Download the correct artifact under the completed run:
    - `BlakeEditor-Debug-APK`: normal debug package, **not** the preferred side-by-side phone test.
-   - `BlakeEditor-Isolated-Test-APK`: uniquely named debug install that can coexist with Original.
+   - `BlakeEditor-Isolated-Test-APK`: uniquely named debug install that can coexist with older installations.
+   - `BlakePersonal-UNSIGNED-SIGN-FIRST`: **unsigned** personal release candidate; **never install without private signing and verification**.
 
-Artifacts have a **7-day** configured retention period. They are test outputs, not signed production releases. The workflow is triggered by `workflow_dispatch` and `pull_request`; it does **not** automatically run for a push to `main`.
+Debug/isolated artifacts have **7-day** configured retention; the unsigned personal artifact has **14-day** retention. They are unsigned or debug/test outputs, not signed published releases. The workflow is triggered by `workflow_dispatch` and `pull_request`; it does **not** automatically run for a push to `main`.
 
 ### Local developer build
 
@@ -229,7 +233,7 @@ The release assemble step is **not** signing, publication or a safe upgrade test
 
 ### CI checks
 
-The workflow verifies the web editor input/caret regression, V2 theme and button checks, JVM tests, debug build, nonpublished release build, release launcher and reader assets, isolated package ID and uploaded APK artifacts. Source-only documentation PRs can still trigger the build.
+The full CI tier verifies the web editor input/caret regression, V2 theme and button checks, JVM tests, pinned vendor assets, debug build, nonpublished unsigned release build, single Original launcher and reader assets, isolated package ID and uploaded APK artifacts. Docs-only PRs use a reduced scope check; a skipped APK build is NOT_RUN, not PASS. Documentation-only PRs trigger the scope check and normally skip the APK build.
 
 Historical integrated evidence: [PR #34 CI run 43124844965](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43124844965) passed on integrated head `30285c7912a057000ec2dcac2242251418cc2130`. The A–F phone acceptance was later reported by the user. **Do not treat that historical PR run as a new run on the current `main` SHA.**
 
@@ -257,6 +261,9 @@ Historical integrated evidence: [PR #34 CI run 43124844965](https://github.com/s
 See [G–L closeout roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) for scoped deliverables, exact pass criteria, and stop conditions. **No phase automatically authorizes the next phase's merge, rollout or destructive operations.**
 
 ## Documentation index
+
+- [Blake Personal phone closeout, installation results and safe recovery](docs/BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md)
+- [Blake Personal private signing and update precautions](docs/BLAKE_PERSONAL_SIGNING_READINESS.md)
 
 - [Current G–L closeout roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md)
 - [A–F remaining-work plan](docs/BLAKE_V2_REMAINING_WORK_PLAN.md)
