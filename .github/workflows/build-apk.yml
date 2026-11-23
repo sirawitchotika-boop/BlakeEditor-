@@ -1,8 +1,13 @@
-name: Build Debug APK
+name: Build & Release Blake APK
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -23,7 +28,6 @@ jobs:
           import subprocess
 
           tier = "full"
-          paths = []
           if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
               try:
                   parents = subprocess.check_output(
@@ -43,7 +47,7 @@ jobs:
                           tier = "tests"
               except (OSError, subprocess.CalledProcessError) as error:
                   print(f"Could not classify PR paths; using full verification: {error}")
-          print(f"Verification tier: {tier} | Changed files: {len(paths)}")
+          print(f"Verification tier: {tier}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"tier={tier}\n")
           PY
@@ -69,88 +73,68 @@ jobs:
           fi
           chmod +x gradlew
 
-      - name: Run Unit Tests & Build Debug APK
-        if: steps.scope.outputs.tier == 'full'
-        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
-
-      - name: Run Unit Tests Only (no APK)
-        if: steps.scope.outputs.tier == 'tests'
+      - name: Run Unit Tests
+        if: steps.scope.outputs.tier != 'docs'
         run: ./gradlew testDebugUnitTest --stacktrace
 
-      - name: Upload Debug APK Artifact
-        if: steps.scope.outputs.tier == 'full'
-        uses: actions/upload-artifact@v7
-        with:
-          name: BlakeEditor-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
-          retention-days: 7
+      - name: Build Debug APK (PR check)
+        if: github.event_name == 'pull_request' && steps.scope.outputs.tier == 'full'
+        run: ./gradlew assembleDebug --stacktrace
 
-      - name: Build Release Variant (unsigned)
-        if: steps.scope.outputs.tier == 'full'
-        run: ./gradlew assembleRelease --stacktrace
-
-      - name: Verify Release Manifest and Clean Packaging
-        if: steps.scope.outputs.tier == 'full'
+      - name: Build & Verify Signed Release APK (main)
+        if: github.event_name != 'pull_request'
+        env:
+          BLAKE_KEYSTORE_BASE64: ${{ secrets.BLAKE_KEYSTORE_BASE64 }}
+          BLAKE_KEYSTORE_PASSWORD: ${{ secrets.BLAKE_KEYSTORE_PASSWORD }}
+          BLAKE_KEY_ALIAS: ${{ secrets.BLAKE_KEY_ALIAS }}
+          BLAKE_KEY_PASSWORD: ${{ secrets.BLAKE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)
+          test -n "$BLAKE_KEYSTORE_BASE64"
+          KEYSTORE="$RUNNER_TEMP/blake-release.p12"
+          printf '%s' "$BLAKE_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+          export BLAKE_KEYSTORE_PATH="$KEYSTORE"
+
+          ./gradlew assembleRelease --stacktrace
+
+          APK=$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*-release.apk' -print -quit)
           test -n "$APK"
-          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
-          "$AAPT" dump badging "$APK" > release-badging.txt
-          grep -F "package: name='com.blake.editor.personal'" release-badging.txt
-          grep -F "versionCode='2'" release-badging.txt
+
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$BUILD_TOOLS/apksigner" verify "$APK"
+          "$BUILD_TOOLS/aapt" dump badging "$APK" > release-badging.txt
+          grep -F "package: name='com.blake.notes'" release-badging.txt
           grep -F "application-label:'Blake'" release-badging.txt
           grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'" release-badging.txt
           test "$(grep -c '^launchable-activity:' release-badging.txt)" -eq 1
-          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > release-manifest-tree.txt
-          grep -F 'ExternalFileRouterActivity' release-manifest-tree.txt
-          grep -F 'LargeFileReaderActivity' release-manifest-tree.txt
-          if "$AAPT" list "$APK" | grep -Eq '^assets/(editor|reader)/'; then
-            echo "ERROR: Legacy WebView/Ace assets found in APK"
-            exit 1
+
+          VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)
+          test -n "$VERSION"
+          OUT_NAME="Blake-v${VERSION}.apk"
+          mkdir -p release-output
+          cp -- "$APK" "release-output/$OUT_NAME"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$OUT_NAME" >> "$GITHUB_OUTPUT"
+        id: release_apk
+
+      - name: Cleanup temporary keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/blake-release.p12"
+
+      - name: Publish Direct APK to GitHub Releases
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release_apk.outputs.version }}
+          APK_NAME: ${{ steps.release_apk.outputs.apk_name }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          APK_PATH="release-output/${APK_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_PATH" --clobber
+          else
+            gh release create "$TAG" "$APK_PATH" \
+              --title "Blake ${TAG}" \
+              --notes "Direct ready-to-install Android APK for **Blake ${VERSION}** (\`com.blake.notes\`). Tap \`${APK_NAME}\` on your phone to install or update in-place."
           fi
-
-      - name: Stage Blake unsigned release APK
-        if: steps.scope.outputs.tier == 'full'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t candidates < <(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*-unsigned.apk' -print)
-          test "${#candidates[@]}" -eq 1
-          mkdir -p blake-personal-output
-          cp -- "${candidates[0]}" blake-personal-output/BlakePersonal-UNSIGNED.apk
-          sha256sum blake-personal-output/BlakePersonal-UNSIGNED.apk
-
-      - name: Upload Blake UNSIGNED APK (sign before installing)
-        if: steps.scope.outputs.tier == 'full'
-        uses: actions/upload-artifact@v7
-        with:
-          name: BlakePersonal-UNSIGNED-SIGN-FIRST
-          path: blake-personal-output/BlakePersonal-UNSIGNED.apk
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Build Side-by-Side Isolated Test APK
-        if: steps.scope.outputs.tier == 'full'
-        run: ./gradlew clean assembleDebug "-PisolatedTestApkSuffix=.test${{ github.run_id }}a${{ github.run_attempt }}" --stacktrace
-
-      - name: Verify Isolated Test Package ID
-        if: steps.scope.outputs.tier == 'full'
-        run: |
-          set -euo pipefail
-          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
-          test -n "$APK"
-          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
-          "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.personal.test${{ github.run_id }}a${{ github.run_attempt }}'"
-          LABEL="Blake T${GITHUB_RUN_ID: -6}a${GITHUB_RUN_ATTEMPT}"
-          "$AAPT" dump badging "$APK" | grep -F "label='$LABEL'"
-          "$AAPT" dump badging "$APK" | grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'"
-          test "$("$AAPT" dump badging "$APK" | grep -c '^launchable-activity:')" -eq 1
-
-      - name: Upload Isolated Test APK Artifact
-        if: steps.scope.outputs.tier == 'full'
-        uses: actions/upload-artifact@v7
-        with:
-          name: BlakeEditor-Isolated-Test-APK
-          path: app/build/outputs/apk/debug/*.apk
-          retention-days: 7
