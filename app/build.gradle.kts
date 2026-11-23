@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // A personal release is signed only by an explicit, separate private build.
@@ -24,14 +25,14 @@ if (blakePersonalSign) {
 
 android {
     namespace = "com.blake.editor"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.blake.editor.personal"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -60,12 +61,8 @@ android {
             )
         }
         debug {
-            // Optional side-by-side phone-test build. Never replace the
-            // installed original or normal debug app when signing keys differ.
-            // Standard debug remains com.blake.editor.personal.debug.
-            // A unique ID per CI run prevents the next test APK from
-            // colliding with a differently signed isolated app on the phone.
-            // Preserve the existing .isolatedtest fallback for older builds.
+            // Optional side-by-side phone-test build so CI debug APKs never
+            // collide with the installed personal release app.
             applicationIdSuffix =
                 providers.gradleProperty("isolatedTestApkSuffix").orNull
                     ?: if (providers.gradleProperty("isolatedTestApk").orNull == "true") {
@@ -75,22 +72,16 @@ android {
                     }
             isDebuggable = true
 
-            // Launcher labels are debug-only. Show a short CI run marker so
-            // side-by-side test APKs cannot be confused on a phone.
-            // The full, unique run identity remains in applicationIdSuffix.
             val isolatedRunTag = providers.gradleProperty("isolatedTestApkSuffix").orNull
                 ?.let { Regex("""^\.test([0-9]+)a([0-9]+)$""").matchEntire(it) }
                 ?.let { "T${it.groupValues[1].takeLast(6)}a${it.groupValues[2]}" }
                 ?: "Debug"
-            resValue("string", "blake_debug_editor_label", "Personal $isolatedRunTag")
-            resValue("string", "blake_debug_v2_label", "V2 $isolatedRunTag")
-            resValue("string", "blake_debug_input_label", "Input $isolatedRunTag")
+            resValue("string", "blake_debug_editor_label", "Blake $isolatedRunTag")
         }
     }
 
-    // Debug launcher labels are generated at build time from the CI run ID.
-    // This enables resValue only; no release-only label resources are added.
     buildFeatures {
+        compose = true
         resValues = true
     }
 
@@ -101,15 +92,31 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.19.0")
+    val composeBom = platform("androidx.compose:compose-bom:2026.02.00")
+    implementation(composeBom)
+
+    implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
-    implementation("androidx.activity:activity-ktx:1.13.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
-    implementation("androidx.webkit:webkit:1.17.0")
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
+
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+
     implementation("androidx.documentfile:documentfile:1.1.0")
-    implementation("androidx.datastore:datastore-preferences:1.2.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("androidx.datastore:datastore-preferences:1.1.7")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // Pure-Java CommonMark + GFM extensions for instant native Markdown reading
+    implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+    implementation("org.commonmark:commonmark-ext-task-list-items:0.24.0")
 
     testImplementation("junit:junit:4.13.2")
 }

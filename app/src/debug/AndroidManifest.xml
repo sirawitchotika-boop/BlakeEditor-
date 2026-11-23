@@ -1,16 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <!-- Personal debug builds expose only Original as a launcher.
-             V2 remains opt-in inside Original; Input Lab code is retained
-             for diagnostics without adding another launcher icon. -->
         <activity
             android:name=".ui.main.MainActivity"
             android:label="@string/blake_debug_editor_label" />
-        <activity
-            android:name=".ui.lab.InputLabActivity"
-            android:exported="false"
-            android:label="@string/blake_debug_input_label"
-            android:theme="@style/Theme.BlakePreview" />
     </application>
 </manifest>

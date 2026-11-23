@@ -1,30 +1,24 @@
 package com.blake.editor.file
 
+import com.blake.editor.core.util.FileNameUtils
+
 object SupportedFileTypes {
-    val SUPPORTED_EXTENSIONS = setOf(
-        "txt", "md", "markdown", "log", "conf", "ini",
-        "kt", "kts", "java", "js", "mjs", "cjs", "ts",
-        "py", "html", "htm", "css", "json", "xml", "svg",
-        "yml", "yaml", "sql", "sh", "bash", "zsh", "fish",
-        "c", "cpp", "h", "hpp", "cc", "rs", "go"
-    )
+    val MARKDOWN_EXTENSIONS = setOf("md", "markdown")
+    val SUPPORTED_EXTENSIONS = setOf("txt", "md", "markdown", "text", "log")
 
     val SUPPORTED_MIME_TYPES = setOf(
         "text/plain",
         "text/markdown",
-        "text/x-markdown",
-        "text/html",
-        "text/css",
-        "application/json",
-        "text/xml",
-        "application/xml",
-        "application/x-yaml",
-        "text/yaml",
-        "text/x-python",
-        "text/x-shellscript"
+        "text/x-markdown"
     )
 
-    fun isSupportedExtension(extension: String): Boolean {
-        return SUPPORTED_EXTENSIONS.contains(extension.lowercase())
+    fun isSupportedExtension(extension: String): Boolean =
+        SUPPORTED_EXTENSIONS.contains(extension.lowercase())
+
+    fun isMarkdownFile(fileName: String, mimeType: String? = null): Boolean {
+        val ext = FileNameUtils.getExtension(fileName)
+        if (ext in MARKDOWN_EXTENSIONS) return true
+        val mime = mimeType?.lowercase().orEmpty()
+        return mime == "text/markdown" || mime == "text/x-markdown"
     }
 }
