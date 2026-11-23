@@ -11,8 +11,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          # PR checkout is a synthetic merge commit; fetch its first parent for
-          # a conservative, complete change classification.
           fetch-depth: 2
 
       - name: Select verification tier
@@ -31,8 +29,6 @@ jobs:
                   parents = subprocess.check_output(
                       ["git", "rev-list", "--parents", "-n", "1", "HEAD"], text=True
                   ).strip().split()
-                  # Only trust the two-parent PR merge commit. For any unusual
-                  # checkout, use full verification instead of a partial diff.
                   if len(parents) == 3:
                       raw = subprocess.check_output(
                           ["git", "diff", "--name-only", "-z", parents[1], parents[0]]
@@ -47,7 +43,6 @@ jobs:
                           tier = "tests"
               except (OSError, subprocess.CalledProcessError) as error:
                   print(f"Could not classify PR paths; using full verification: {error}")
-          # Manual workflow_dispatch and any unknown event always build fully.
           print(f"Verification tier: {tier} | Changed files: {len(paths)}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"tier={tier}\n")
@@ -66,14 +61,6 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Test pinned vendor asset integrity checks (offline)
-        if: steps.scope.outputs.tier != 'docs'
-        run: python3 -m unittest discover -s scripts/tests -p 'test_verified_vendor_assets.py' -v
-
-      - name: Download and verify pinned vendor assets
-        if: steps.scope.outputs.tier != 'docs'
-        run: python3 scripts/verified_vendor_assets.py install --manifest "$RUNNER_TEMP/blake-vendor.sha256"
-
       - name: Ensure Gradle Wrapper
         if: steps.scope.outputs.tier != 'docs'
         run: |
@@ -81,36 +68,6 @@ jobs:
             gradle wrapper --gradle-version 9.6.0
           fi
           chmod +x gradlew
-
-      - name: Check Web Editor input and caret regression
-        if: steps.scope.outputs.tier != 'docs'
-        run: node app/src/test/js/editor-host-input-regression.test.cjs
-
-      - name: Check V2 Entry theme regression
-        if: steps.scope.outputs.tier != 'docs'
-        run: |
-          # The V2 button row must follow the chosen theme, not stay black
-          # when Original is using a light/Eye Care palette.
-          grep -Fq 'android:id="@+id/v2EntryBar"' app/src/main/res/layout/activity_main.xml
-          grep -Fq 'v2EntryBar = findViewById(R.id.v2EntryBar)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
-          grep -Fq 'v2EntryBar.setBackgroundColor(palette.surfaceColor)' app/src/main/java/com/blake/editor/ui/main/MainActivity.kt
-
-      - name: Check V2 Beta Button Tap Target
-        if: steps.scope.outputs.tier != 'docs'
-        run: |
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          root = ET.parse("app/src/main/res/layout/activity_main.xml").getroot()
-          a = "{http://schemas.android.com/apk/res/android}"
-          row = next(el for el in root if el.get(a + "id") == "@+id/v2EntryBar")
-          button = next(el for el in row if el.get(a + "id") == "@+id/btnOpenV2")
-          assert button.get(a + "layout_width") == "match_parent"
-          assert int(button.get(a + "layout_height").removesuffix("dp")) >= 48
-          assert button.get(a + "layout_marginStart") == "8dp"
-          assert button.get(a + "layout_marginEnd") == "8dp"
-          assert button.get(a + "text") == "@string/action_open_v2"
-          print("V2 Beta button is full-width with a >=48dp tap target.")
-          PY
 
       - name: Run Unit Tests & Build Debug APK
         if: steps.scope.outputs.tier == 'full'
@@ -128,81 +85,32 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
 
-      # Phone acceptance uses this *separate* install identity so a different
-      # GitHub Actions signing key cannot replace or erase the installed app.
-      # The normal debug APK above remains available and unchanged.
-      # Validate the release variant compiles the shared V2 screens, while
-      # keeping them absent from the production launcher and exported routes.
-      # This builds an unsigned release APK only; no publishing or deployment.
-      - name: Build Release Variant (not published)
+      - name: Build Release Variant (unsigned)
         if: steps.scope.outputs.tier == 'full'
         run: ./gradlew assembleRelease --stacktrace
 
-      - name: Verify packaged vendor hashes match pinned packages
-        if: steps.scope.outputs.tier == 'full'
-        run: |
-          set -euo pipefail
-          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)
-          test -n "$APK"
-          python3 scripts/verified_vendor_assets.py verify-apk \
-            --manifest "$RUNNER_TEMP/blake-vendor.sha256" --apk "$APK"
-
-      - name: Verify Release Launcher and Reader Assets
+      - name: Verify Release Manifest and Clean Packaging
         if: steps.scope.outputs.tier == 'full'
         run: |
           set -euo pipefail
           APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -print -quit)
           test -n "$APK"
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
-          "$AAPT" dump badging "$APK" | grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'"
-          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > release-manifest-tree.txt
-          grep -F 'ExternalFileRouterActivity' release-manifest-tree.txt
-          # V2 is registered in release only for an explicit internal launch.
-          # Neither V2 nor Input Lab may become an exported/launcher entry.
-          grep -F 'V2WorkspacePreviewActivity' release-manifest-tree.txt
-          grep -F 'com.blake.editor.ui.preview.LargeTextReaderActivity' release-manifest-tree.txt
-          if grep -Eq '(InputLabActivity|V2WorkspaceDebugLauncher)' release-manifest-tree.txt; then
-            echo "ERROR: Debug-only launcher is in the release manifest"
-            exit 1
-          fi
           "$AAPT" dump badging "$APK" > release-badging.txt
           grep -F "package: name='com.blake.editor.personal'" release-badging.txt
-          grep -F "application-label:'Blake Personal'" release-badging.txt
+          grep -F "versionCode='2'" release-badging.txt
+          grep -F "application-label:'Blake'" release-badging.txt
+          grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'" release-badging.txt
           test "$(grep -c '^launchable-activity:' release-badging.txt)" -eq 1
-          # Check activity attributes in the compiled release manifest, not
-          # just in the source XML; both V2 entrypoints must be non-exported.
-          python3 - <<'PY'
-          from pathlib import Path
-          lines = Path("release-manifest-tree.txt").read_text().splitlines()
-          targets = ("com.blake.editor.ui.preview.V2WorkspacePreviewActivity",
-                     "com.blake.editor.ui.preview.LargeTextReaderActivity")
-          for target in targets:
-              names = [i for i, line in enumerate(lines)
-                       if 'android:name' in line and f'"{target}"' in line]
-              assert len(names) == 1, (target, names)
-              i = names[0]
-              n = i
-              while n >= 0 and "E: activity " not in lines[n] and not lines[n].strip().startswith("E: activity ("):
-                  n -= 1
-              assert n >= 0, target
-              depth = len(lines[n]) - len(lines[n].lstrip())
-              end = next((k for k in range(n + 1, len(lines))
-                          if lines[k].lstrip().startswith("E: ") and
-                          len(lines[k]) - len(lines[k].lstrip()) <= depth),
-                         len(lines))
-              attrs = "\n".join(lines[n+1:end])
-              assert any("android:exported" in line and "0x0" in line
-                         for line in attrs.splitlines()), target
-              assert "android.intent.action.MAIN" not in attrs, target
-          PY
-          "$AAPT" list "$APK" | grep -Fx 'assets/reader/index.html'
-          "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.js'
-          "$AAPT" list "$APK" | grep -Fx 'assets/reader/reader.css'
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > release-manifest-tree.txt
+          grep -F 'ExternalFileRouterActivity' release-manifest-tree.txt
+          grep -F 'LargeFileReaderActivity' release-manifest-tree.txt
+          if "$AAPT" list "$APK" | grep -Eq '^assets/(editor|reader)/'; then
+            echo "ERROR: Legacy WebView/Ace assets found in APK"
+            exit 1
+          fi
 
-      # The release build above is UNSIGNED. Upload one clearly named file
-      # for an owner-controlled, offline signing step on Android. Do this
-      # before isolated-test Gradle 'clean' removes release outputs.
-      - name: Stage Blake Personal unsigned APK
+      - name: Stage Blake unsigned release APK
         if: steps.scope.outputs.tier == 'full'
         shell: bash
         run: |
@@ -213,7 +121,7 @@ jobs:
           cp -- "${candidates[0]}" blake-personal-output/BlakePersonal-UNSIGNED.apk
           sha256sum blake-personal-output/BlakePersonal-UNSIGNED.apk
 
-      - name: Upload Blake Personal UNSIGNED APK (do not install)
+      - name: Upload Blake UNSIGNED APK (sign before installing)
         if: steps.scope.outputs.tier == 'full'
         uses: actions/upload-artifact@v7
         with:
@@ -224,20 +132,17 @@ jobs:
 
       - name: Build Side-by-Side Isolated Test APK
         if: steps.scope.outputs.tier == 'full'
-        # New ID on every run AND retry; no signing-key collision with old
-        # installed test APKs. Each test install starts with empty app data.
         run: ./gradlew clean assembleDebug "-PisolatedTestApkSuffix=.test${{ github.run_id }}a${{ github.run_attempt }}" --stacktrace
 
       - name: Verify Isolated Test Package ID
         if: steps.scope.outputs.tier == 'full'
         run: |
-          set -e
+          set -euo pipefail
           APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
           test -n "$APK"
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           "$AAPT" dump badging "$APK" | grep -F "package: name='com.blake.editor.personal.test${{ github.run_id }}a${{ github.run_attempt }}'"
-          # A build-specific launcher label lets Boss distinguish test installs.
-          LABEL="Personal T${GITHUB_RUN_ID: -6}a${GITHUB_RUN_ATTEMPT}"
+          LABEL="Blake T${GITHUB_RUN_ID: -6}a${GITHUB_RUN_ATTEMPT}"
           "$AAPT" dump badging "$APK" | grep -F "label='$LABEL'"
           "$AAPT" dump badging "$APK" | grep -F "launchable-activity: name='com.blake.editor.ui.main.MainActivity'"
           test "$("$AAPT" dump badging "$APK" | grep -c '^launchable-activity:')" -eq 1

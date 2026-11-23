@@ -1,281 +1,50 @@
-# Blake Editor
+# Blake
 
-**A mobile-first Android text and code editor with an optional Blake 2.0 Beta workspace.**
+**A calm, mobile-first Android editor and reader for plain text (`.txt`) and Markdown (`.md`).**
 
-Blake Editor keeps the existing **Original** editor as the regular app launcher. Blake 2.0 Beta is available by an intentional in-app action; it has **not** replaced the Original launcher. The project supports native Android typing, syntax-aware code editing, Markdown preview, draft recovery, safe document saving and read-only opening of large external files.
+Blake 1.0 is a clean-slate rebuild of this repository focused strictly on everyday writing and reading—with zero coding-IDE clutter, zero WebView/Ace overhead, and an **Editorial Paper & Ink** design language.
 
-> **Current personal-app milestone — November 17, 2026:** Blake Personal (`com.blake.editor.personal`, version `0.1.0` / code `1`) was privately signed on Boss's phone and installed alongside older apps. Boss reported that the signing record matched, installation and launch passed, and all six short acceptance tests passed. Original remains the **one launcher**; V2 is opt-in. This is a **user-reported private phone install**, not a GitHub/Store release or a tested in-place upgrade. See [Blake Personal phone closeout and recovery](docs/BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md) and [private-signing safety guide](docs/BLAKE_PERSONAL_SIGNING_READINESS.md). The separate [G–L roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) remains a planning record; its broader gates must not be inferred complete.
+> **Legacy preservation:** The previous Blake Personal `0.1.0` codebase (Original + Blake 2.0 Beta + code editor) is permanently preserved at Git tag `legacy-v0.1.0`. Blake `1.0.0` (`versionCode = 2`) keeps package ID `com.blake.editor.personal` for clean in-place upgrades when privately signed, while CI continues generating side-by-side isolated test APKs (`Blake T<run>a<attempt>`) for safe phone testing.
 
-## Start here
+## What Blake does
 
-| Need | Where |
-| --- | --- |
-| Source code | [`app/src/main/`](app/src/main/) |
-| Original Android editor | [`ui/main/MainActivity.kt`](app/src/main/java/com/blake/editor/ui/main/MainActivity.kt) |
-| Blake 2.0 Beta | [`ui/preview/V2WorkspacePreviewActivity.kt`](app/src/main/java/com/blake/editor/ui/preview/V2WorkspacePreviewActivity.kt) |
-| Recovery and draft persistence | [`session/v2/`](app/src/main/java/com/blake/editor/session/v2/) |
-| File reading, encoding and SAF | [`file/`](app/src/main/java/com/blake/editor/file/) |
-| CI / test APKs | [Build Debug APK workflow](.github/workflows/build-apk.yml) |
-| Blake Personal installation and safe restart | [2026-11-17 phone closeout](docs/BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md) · [signing safety](docs/BLAKE_PERSONAL_SIGNING_READINESS.md) |
-| Broader V2 release and closeout plan | [G–L roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) |
-| Cross-chat automation and CI budget | [Project automation workflow](docs/BLAKE_V2_AUTOMATION_WORKFLOW.md) · [Live checkpoint](docs/BLAKE_V2_AUTOMATION_CHECKPOINT.md) |
+- **Editorial Paper & Ink UI:** Warm Paper (light), Charcoal Ink (dark), and System theme modes with clean typography and adjustable text sizes.
+- **Native Android writing canvas:** Smooth Thai, English, and emoji typing with grouped Undo/Redo and a subtle, hideable Markdown formatting bar above the keyboard (`H`, `B`, `I`, lists, checklists, quotes, links).
+- **Non-blocking Find & Replace:** Slim inline bar that never covers your text, live match highlighting, and instant smooth auto-scroll directly to the active match above the keyboard.
+- **Instant native Markdown Reader:** One-tap toggle between writing and book-like Markdown reading (headings, lists, GFM checklists, quotes, tables, links, calm code blocks) powered by CommonMark-Java and Compose—no WebView.
+- **Documents sheet:** Opens straight into your last document or a blank page, with a clean bottom sheet for New Note, Open File, local Drafts, and Recent Files (removing a Recent shortcut never deletes external files).
+- **Built-in file safety:**
+  - Default Android `.txt` & `.md` handler (`ACTION_VIEW` / `ACTION_EDIT`).
+  - Explicit Save with SHA-256 external-modification check, private backup, and readback verification.
+  - Atomic crash-safe draft recovery stored under `filesDir/blake_v1/`.
+  - Read-only paged reader for large files over `2 MiB` with UTF-8, UTF-16, Windows-874, and TIS-620 encoding support.
 
-## What the app does
-
-**Original (default launcher)**
-
-- Android-native text input for English, Thai, emoji, selection, undo/redo and cursor handling.
-- Text and code editing with syntax presentation and line-number support.
-- Open documents from inside the app or through Android file-opening intents.
-- Markdown preview, themes, and safe Save / Save As workflows.
-- Guarded large-file handling: external text files **over 2 MiB** use a read-only paged reader rather than loading the full file into the editable view.
-
-**Blake 2.0 Beta (opt-in workspace)**
-
-- Home, New/Open, multiple independent drafts, Recent, and quick document switching.
-- Persisted Untitled numbering, rename, Trash, Restore, confirmed bulk actions and Recent shortcut hiding.
-- Recovery records with revision checks, atomic writes and process-wide synchronization for store mutations.
-- Code tools, search/replace, Markdown reading, settings and themes.
-- Linked-document safeguards and verified save paths designed to preserve existing user files.
-
-**Debug tools:** Blake Input Lab is a diagnostic input screen in the debug source set. It is not the production launcher or a document saver.
-
-These are implemented capabilities, not a claim that every Android manufacturer, file provider or release-install path has been certified.
-
-## App layout and data flow
+## Architecture
 
 ```text
-Android launcher
-  └── Original: MainActivity
-       ├── NativeInputEditText / editor controller / theme
-       ├── DocumentRepository + encoding + guarded save/open
-       ├── Optional "Blake 2.0 Beta" button
-       │    └── V2WorkspacePreviewActivity
-       │         ├── DraftWorkspace + RecoveryDraftStore
-       │         ├── Rename / Trash / Restore / Recent / selection
-       │         ├── VerifiedDocumentSaver
-       │         ├── Code tools / Markdown reader / themes
-       │         └── V2 LargeTextReaderActivity (internal)
-       └── Original Markdown / reader features
-
-Android ACTION_VIEW / ACTION_EDIT for external documents
-  └── ExternalFileRouterActivity
-       ├── Small supported text: editable Original flow
-       └── File > 2 MiB: read-only LargeTextReaderActivity
+app/src/main/java/com/blake/editor/
+├── app/AppContainer.kt              # Dependency wiring (blake_v1 private storage)
+├── data/                            # Atomic DraftRecoveryStore, RecentDocumentsStore, DataStore prefs
+├── editor/                          # DocumentSearch (live find/replace), NativeUndoHistory
+├── file/                            # SAF repository, verified writer, strict encoding codec, 2 MiB gate & paged reader
+├── intent/                          # Incoming ACTION_VIEW / ACTION_EDIT parser
+├── markdown/                        # CommonMark + GFM AST parser & quick-bar formatting transforms
+├── model/                           # ActiveDocument, ScratchDraft, RecentFile, Theme & FontSize models
+└── ui/
+    ├── theme/BlakeTheme.kt          # Editorial Warm Paper & Charcoal Ink palettes
+    ├── editor/                      # BlakeEditorCanvas, FindReplaceBar, MarkdownQuickBar, MarkdownReaderView, TopBar, Sheets
+    ├── main/                        # MainActivity, BlakeViewModel, BlakeUiState
+    ├── reader/                      # LargeFileReaderActivity (Compose paged >2 MiB reader)
+    └── router/                      # ExternalFileRouterActivity (2 MiB gate before loading)
 ```
 
-The routing, recovery, and file-saving paths are intentionally distinct. **Removing a Recent shortcut does not delete the file or its recovery record.** A restored draft linked to a changed external file must not silently overwrite the real file. Use disposable documents for acceptance testing.
-
-## Repository tree
-
-This is a **grouped map of the actual `main` tree**, not an imaginary full recursive listing. Names are shown where they are useful for navigation; follow the linked directories for every individual file.
-
-```text
-BlakeEditor-/
-├── .github/
-│   └── workflows/build-apk.yml        # PR/manual unit, build, APK and manifest gates
-├── README.md
-├── TASK_PROGRESS.md                    # Historical milestones; not a live release status
-├── build.gradle.kts                    # Android Gradle plugin version
-├── settings.gradle.kts                 # Repositories and :app inclusion
-├── gradle.properties
-├── gradle/wrapper/
-│   └── gradle-wrapper.properties
-├── app/
-│   ├── build.gradle.kts                # SDK, package identities and dependencies
-│   ├── proguard-rules.pro
-│   └── src/
-│       ├── main/
-│       │   ├── AndroidManifest.xml     # Original launcher; external routing; internal V2
-│       │   ├── assets/
-│       │   │   ├── editor/
-│       │   │   │   ├── index.html, editor.css, editor-host.js, preview.js
-│       │   │   │   └── vendor/{ace,marked,dompurify}/
-│       │   │   └── reader/{index.html,reader.css,reader.js}
-│       │   ├── java/com/blake/editor/
-│       │   │   ├── BlakeEditorApp.kt
-│       │   │   ├── app/AppContainer.kt
-│       │   │   ├── core/{model,util}/
-│       │   │   ├── editor/
-│       │   │   │   ├── NativeInputEditText.kt
-│       │   │   │   ├── EditorController.kt, EditorBridge.kt
-│       │   │   │   ├── NativeUndoHistory.kt, NativeCodePresentation.kt
-│       │   │   │   └── v2/{CodeLineIndex,CodeSyntaxScanner,EditorFindReplace}.kt
-│       │   │   ├── file/
-│       │   │   │   ├── AndroidDocumentRepository.kt, DocumentRepository.kt
-│       │   │   │   ├── TextEncodingCodec.kt, UriPermissionManager.kt
-│       │   │   │   ├── LargeTextOpenGate.kt, PagedTextReader.kt
-│       │   │   │   └── BoundedEditableTextReader.kt, DocumentMetadataReader.kt
-│       │   │   ├── intent/{IncomingIntentParser,OpenDocumentRequest}.kt
-│       │   │   ├── session/
-│       │   │   │   ├── SessionStore.kt, FileDraftRepository.kt
-│       │   │   │   └── v2/
-│       │   │   │       ├── DocumentIdentity.kt, DraftWorkspace.kt
-│       │   │   │       ├── RecoveryDraftStore.kt, VerifiedDocumentSaver.kt
-│       │   │   │       └── V2HomeSections.kt
-│       │   │   ├── settings/{SettingsRepository,ThemeController,SharedEditorTheme}.kt
-│       │   │   └── ui/
-│       │   │       ├── main/{MainActivity,MainViewModel,MainUiState,V2EntryPolicy}.kt
-│       │   │       ├── large/{ExternalFileRouterActivity,LargeTextReaderActivity}.kt
-│       │   │       ├── preview/
-│       │   │       │   ├── V2WorkspacePreviewActivity.kt
-│       │   │       │   ├── PreviewCodeEditText.kt, PreviewEditorSettings.kt
-│       │   │       │   ├── PreviewPowerPolicy.kt, PreviewResumePolicy.kt
-│       │   │       │   ├── PreviewSafeArea.kt, PreviewSystemBars.kt
-│       │   │       │   └── LargeTextReaderActivity.kt
-│       │   │       └── system/EdgeToEdgeController.kt
-│       │   └── res/{layout,drawable,drawable-nodpi,mipmap-anydpi-v26,values,values-night}/
-│       ├── debug/
-│       │   ├── AndroidManifest.xml
-│       │   └── java/com/blake/editor/ui/lab/
-│       │       ├── InputLabActivity.kt
-│       │       └── InputProbeSamples.kt
-│       └── test/
-│           ├── java/com/blake/editor/
-│           │   ├── core/util/
-│           │   ├── editor/ and editor/v2/
-│           │   ├── file/
-│           │   ├── intent/
-│           │   ├── session/ and session/v2/
-│           │   ├── settings/
-│           │   └── ui/{lab,main,preview}/
-│           └── js/editor-host-input-regression.test.cjs
-└── docs/
-    ├── BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md # Personal install and recovery
-    ├── BLAKE_PERSONAL_SIGNING_READINESS.md # Signing and upgrade safety
-    ├── BLAKE_V2_CLOSEOUT_ROADMAP.md     # G–L plan and closure checklist
-    ├── BLAKE_V2_REMAINING_WORK_PLAN.md   # Historic A–F plan
-    ├── BLAKE_V2_SIX_PHASE_AGENT_RUNBOOK.md
-    ├── BLAKE_V2_EXECUTION_CHECKPOINT.md
-    └── BLAKE_EDITOR_*.md                 # Feature-specific milestone notes
-```
-
-### Module responsibility guide
-
-| Path | Responsibility |
-| --- | --- |
-| `ui/main/` | Original entry point, user actions, editor UI and opt-in V2 button |
-| `ui/preview/` | V2 workspace, its input/settings and internal reader |
-| `ui/large/` | External Android file intent classification and safe large-file reader |
-| `editor/`, `editor/v2/` | Input sync, undo, syntax, code line indexing and find/replace |
-| `file/` | Android content URIs, metadata, decoding, bounds and paging |
-| `session/`, `session/v2/` | Draft identity, persistence, revision and recovery workflows |
-| `settings/` | Shared theme and settings behavior |
-| `assets/editor/` | HTML/JS/CSS for editor and Markdown surfaces |
-| `assets/reader/` | Read-only HTML/JS/CSS reader assets |
-| `src/debug/` | Input Lab and debug-only manifest entries |
-| `src/test/` | JVM tests and Node regression check |
-| `docs/` | Historical design decisions, gate evidence and roadmap |
-
-## Build settings and dependencies
-
-Values below were rechecked against Gradle on `main` on **November 17, 2026**. This is the declared dependency list, not a software bill of materials with resolved transitive packages.
-
-| Item | Declared value |
-| --- | --- |
-| Android Gradle Plugin | `com.android.application:9.4.0` |
-| Gradle distribution | `9.6.0` |
-| Java source / target | `17` |
-| Android compile / target / minimum SDK | `37` / `36` / `28` |
-| Android namespace / Blake Personal release ID | `com.blake.editor` / `com.blake.editor.personal` |
-| Current Gradle versionName / versionCode | `0.1.0` / `1` — **not** a published release claim |
-| Default debug application ID | `com.blake.editor.personal.debug` |
-| Per-run isolated debug ID | `com.blake.editor.personal.test<run_id>a<attempt>` |
-
-**Android dependencies** (from `app/build.gradle.kts`):
-
-| Dependency | Version |
-| --- | --- |
-| `androidx.core:core-ktx` | 1.19.0 |
-| `androidx.appcompat:appcompat` | 1.7.1 |
-| `androidx.activity:activity-ktx` | 1.13.0 |
-| `androidx.lifecycle:lifecycle-viewmodel-ktx` | 2.11.0 |
-| `androidx.lifecycle:lifecycle-runtime-ktx` | 2.11.0 |
-| `androidx.webkit:webkit` | 1.17.0 |
-| `androidx.documentfile:documentfile` | 1.1.0 |
-| `androidx.datastore:datastore-preferences` | 1.2.1 |
-| `org.jetbrains.kotlinx:kotlinx-coroutines-android` | 1.11.0 |
-| `junit:junit` (tests) | 4.13.2 |
-
-**JavaScript assets downloaded by CI:**
-
-- Ace Editor `1.44.0`, from cdnjs.
-- marked `18.0.7`, from jsDelivr.
-- DOMPurify `3.4.15`, from cdnjs.
-
-Some checked-in `assets/editor/vendor/` files are small placeholders. **CI downloads the full vendor assets before building.** A local build must provision the same assets to match CI. CI uses pinned-download integrity verification via `scripts/verified_vendor_assets.py`; broader audits follow their separate G–L gates.
-
-## Building and testing
-
-### Recommended: GitHub Actions
-
-1. Open [Actions](https://github.com/sirawitchotika-boop/BlakeEditor-/actions).
-2. Select **Build Debug APK**, then use **Run workflow** on the intended branch. Pull requests trigger the same workflow.
-3. Check the run's **conclusion** and its **exact head commit**.
-4. Download the correct artifact under the completed run:
-   - `BlakeEditor-Debug-APK`: normal debug package, **not** the preferred side-by-side phone test.
-   - `BlakeEditor-Isolated-Test-APK`: uniquely named debug install that can coexist with older installations.
-   - `BlakePersonal-UNSIGNED-SIGN-FIRST`: **unsigned** personal release candidate; **never install without private signing and verification**.
-
-Debug/isolated artifacts have **7-day** configured retention; the unsigned personal artifact has **14-day** retention. They are unsigned or debug/test outputs, not signed published releases. The workflow is triggered by `workflow_dispatch` and `pull_request`; it does **not** automatically run for a push to `main`.
-
-### Local developer build
-
-Install JDK 17, Android SDK/platform for API 37, and Gradle 9.6.0. The GitHub tree contains Gradle wrapper **properties**, but the executable wrapper files are not checked in; CI creates the wrapper when needed. With the matching full JavaScript vendor assets prepared:
+## Build & Verification
 
 ```bash
-gradle wrapper --gradle-version 9.6.0
 ./gradlew testDebugUnitTest assembleDebug assembleRelease
-node app/src/test/js/editor-host-input-regression.test.cjs
 ```
 
-The release assemble step is **not** signing, publication or a safe upgrade test. For an exact reproducible build use the current GitHub Actions workflow and inspect its asset-download steps.
-
-### CI checks
-
-The full CI tier verifies the web editor input/caret regression, V2 theme and button checks, JVM tests, pinned vendor assets, debug build, nonpublished unsigned release build, single Original launcher and reader assets, isolated package ID and uploaded APK artifacts. Docs-only PRs use a reduced scope check; a skipped APK build is NOT_RUN, not PASS. Documentation-only PRs trigger the scope check and normally skip the APK build.
-
-Historical integrated evidence: [PR #34 CI run 43124844965](https://github.com/sirawitchotika-boop/BlakeEditor-/actions/runs/43124844965) passed on integrated head `30285c7912a057000ec2dcac2242251418cc2130`. The A–F phone acceptance was later reported by the user. **Do not treat that historical PR run as a new run on the current `main` SHA.**
-
-## File and user-data safety rules
-
-- Never uninstall the installed Original app or clear its storage as a shortcut to testing.
-- Use test-only documents for Trash, Restore, Save, Save As and encoding checks.
-- Keep Android SAF URI permission handling and the external file router intact.
-- Recovery metadata, draft text and Recent shortcut visibility are different concerns; never equate “hide Recent” with delete.
-- Keep the read-only large-file protection and warning behavior.
-- The shared recovery lock protects in-process store mutations; a broader cross-process lock is **not** claimed.
-- A new APK package ID or signing key is **not** automatically a safe upgrade for existing users.
-- Default launcher promotion, merging code and publishing a release are three separate decisions.
-
-## Development phases and release decision
-
-- **A–F:** integration audits, fixes, exact-head CI and isolated-phone acceptance — completed in the earlier project run (historical evidence in [checkpoint](docs/BLAKE_V2_EXECUTION_CHECKPOINT.md)).
-- **G:** README, architecture and closeout documentation.
-- **H:** final stability, security and data-safety review.
-- **I:** Android device and provider acceptance on a release candidate.
-- **J:** version/signing/upgrade/rollback and reproducible release-candidate gate.
-- **K:** controlled, separately approved release; optional V2 or default-V2 launcher decided explicitly.
-- **L:** final release verification, documentation, tag, maintenance handoff and closure.
-
-See [G–L closeout roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md) for scoped deliverables, exact pass criteria, and stop conditions. **No phase automatically authorizes the next phase's merge, rollout or destructive operations.**
-
-## Documentation index
-
-- [Blake Personal phone closeout, installation results and safe recovery](docs/BLAKE_PERSONAL_PHONE_CLOSEOUT_2026-11-17.md)
-- [Blake Personal private signing and update precautions](docs/BLAKE_PERSONAL_SIGNING_READINESS.md)
-
-- [Current G–L closeout roadmap](docs/BLAKE_V2_CLOSEOUT_ROADMAP.md)
-- [A–F remaining-work plan](docs/BLAKE_V2_REMAINING_WORK_PLAN.md)
-- [A–F agent runbook](docs/BLAKE_V2_SIX_PHASE_AGENT_RUNBOOK.md)
-- [A–F GitHub execution checkpoint](docs/BLAKE_V2_EXECUTION_CHECKPOINT.md)
-- [V2 recovery design](docs/BLAKE_EDITOR_V2_DRAFT_RECOVERY.md)
-- [V2 safe save](docs/BLAKE_EDITOR_V2_SAFE_SAVE.md)
-- [External large-file safeguards](docs/BLAKE_EDITOR_LARGE_EXTERNAL_OPEN.md)
-- [Historical promotion gate](docs/BLAKE_EDITOR_V2_PROMOTION_GATE.md)
-
-Historical milestone files (including `TASK_PROGRESS.md`) are useful for context but may describe older branch states. **Use current code and exact-head CI as the source of truth.**
-
-## Contributing and maintenance
-
-Keep work in small PRs based on the current `main`. Document affected files and data-safety boundaries; add focused regression coverage for every bug fix. Verify exact-head CI and use an isolated, disposable-data APK for device acceptance. Preserve the Original launcher and external file data unless an explicit later gate authorizes a change. Never commit private keys, real user documents, local Android SDK paths, or recovery files.
+GitHub Actions (`.github/workflows/build-apk.yml`) runs unit tests and produces:
+1. `BlakeEditor-Debug-APK` — standard debug build (`com.blake.editor.personal.debug`)
+2. `BlakeEditor-Isolated-Test-APK` — unique-ID side-by-side phone test APK (`Blake T<run>a<attempt>`)
+3. `BlakePersonal-UNSIGNED-SIGN-FIRST` — unsigned release APK (`com.blake.editor.personal`, `versionCode = 2`) for owner-controlled offline signing
