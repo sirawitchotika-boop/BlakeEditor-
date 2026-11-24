@@ -3,56 +3,44 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// A personal release is signed only by an explicit, separate private build.
-// Normal PR CI and unsigned release checks never load signing credentials.
-val blakePersonalSign = providers.gradleProperty("blakePersonalSign").orNull == "true"
-val blakeSigningInputs: Map<String, String?> = if (blakePersonalSign) {
-    mapOf(
-        "BLAKE_PERSONAL_KEYSTORE_PATH" to providers.environmentVariable("BLAKE_PERSONAL_KEYSTORE_PATH").orNull,
-        "BLAKE_PERSONAL_STORE_PASSWORD" to providers.environmentVariable("BLAKE_PERSONAL_STORE_PASSWORD").orNull,
-        "BLAKE_PERSONAL_KEY_ALIAS" to providers.environmentVariable("BLAKE_PERSONAL_KEY_ALIAS").orNull,
-        "BLAKE_PERSONAL_KEY_PASSWORD" to providers.environmentVariable("BLAKE_PERSONAL_KEY_PASSWORD").orNull,
-    )
-} else {
-    emptyMap()
-}
-if (blakePersonalSign) {
-    val missing = blakeSigningInputs.filterValues { it.isNullOrBlank() }.keys
-    require(missing.isEmpty()) {
-        "Personal release signing was requested but inputs are missing: ${missing.joinToString(", ")}"
-    }
-}
+val releaseKeystorePath = providers.environmentVariable("BLAKE_KEYSTORE_PATH").orNull
+val releaseKeystorePassword = providers.environmentVariable("BLAKE_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("BLAKE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("BLAKE_KEY_PASSWORD").orNull
+val hasReleaseSigning = !releaseKeystorePath.isNullOrBlank() &&
+    !releaseKeystorePassword.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank() &&
+    !releaseKeyPassword.isNullOrBlank()
 
 android {
     namespace = "com.blake.editor"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.blake.editor.personal"
+        applicationId = "com.blake.notes"
         minSdk = 28
         targetSdk = 36
-        versionCode = 2
+        versionCode = 1
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
-        if (blakePersonalSign) {
-            create("personalRelease") {
-                storeFile = file(blakeSigningInputs.getValue("BLAKE_PERSONAL_KEYSTORE_PATH")!!)
-                storePassword = blakeSigningInputs.getValue("BLAKE_PERSONAL_STORE_PASSWORD")
-                keyAlias = blakeSigningInputs.getValue("BLAKE_PERSONAL_KEY_ALIAS")
-                keyPassword = blakeSigningInputs.getValue("BLAKE_PERSONAL_KEY_PASSWORD")
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
 
     buildTypes {
         release {
-            // Do not enable signing for ordinary PR, debug, or unsigned builds.
-            if (blakePersonalSign) {
-                signingConfig = signingConfigs.getByName("personalRelease")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
             }
             isMinifyEnabled = false
             proguardFiles(
@@ -61,22 +49,9 @@ android {
             )
         }
         debug {
-            // Optional side-by-side phone-test build so CI debug APKs never
-            // collide with the installed personal release app.
-            applicationIdSuffix =
-                providers.gradleProperty("isolatedTestApkSuffix").orNull
-                    ?: if (providers.gradleProperty("isolatedTestApk").orNull == "true") {
-                        ".isolatedtest"
-                    } else {
-                        ".debug"
-                    }
+            applicationIdSuffix = ".debug"
             isDebuggable = true
-
-            val isolatedRunTag = providers.gradleProperty("isolatedTestApkSuffix").orNull
-                ?.let { Regex("""^\.test([0-9]+)a([0-9]+)$""").matchEntire(it) }
-                ?.let { "T${it.groupValues[1].takeLast(6)}a${it.groupValues[2]}" }
-                ?: "Debug"
-            resValue("string", "blake_debug_editor_label", "Blake $isolatedRunTag")
+            resValue("string", "blake_debug_editor_label", "Blake Debug")
         }
     }
 

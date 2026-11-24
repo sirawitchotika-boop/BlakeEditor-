@@ -2,9 +2,11 @@
 
 **A calm, mobile-first Android editor and reader for plain text (`.txt`) and Markdown (`.md`).**
 
-Blake 1.0 is a clean-slate rebuild of this repository focused strictly on everyday writing and reading—with zero coding-IDE clutter, zero WebView/Ace overhead, and an **Editorial Paper & Ink** design language.
+Blake 1.0 (`com.blake.notes`) is a clean-slate rebuild of this repository focused strictly on everyday writing and reading—with zero coding-IDE clutter, zero WebView/Ace overhead, and an **Editorial Paper & Ink** design language.
 
-> **Legacy preservation:** The previous Blake Personal `0.1.0` codebase (Original + Blake 2.0 Beta + code editor) is permanently preserved at Git tag `legacy-v0.1.0`. Blake `1.0.0` (`versionCode = 2`) keeps package ID `com.blake.editor.personal` for clean in-place upgrades when privately signed, while CI continues generating side-by-side isolated test APKs (`Blake T<run>a<attempt>`) for safe phone testing.
+> **Install & Update:** Download the latest ready-to-install **`Blake-v*.apk`** directly from [GitHub Releases](https://github.com/sirawitchotika-boop/BlakeEditor-/releases/latest). Every release is signed automatically with the same encrypted GitHub Secret key, so new versions update in-place with one tap.
+>
+> **Legacy preservation:** The previous Blake Personal `0.1.0` codebase (`com.blake.editor.personal`) is permanently preserved at Git tag `legacy-v0.1.0`.
 
 ## What Blake does
 
@@ -38,13 +40,10 @@ app/src/main/java/com/blake/editor/
     └── router/                      # ExternalFileRouterActivity (2 MiB gate before loading)
 ```
 
-## Build & Verification
+## Build & Releases
 
 ```bash
-./gradlew testDebugUnitTest assembleDebug assembleRelease
+./gradlew testDebugUnitTest assembleDebug
 ```
 
-GitHub Actions (`.github/workflows/build-apk.yml`) runs unit tests and produces:
-1. `BlakeEditor-Debug-APK` — standard debug build (`com.blake.editor.personal.debug`)
-2. `BlakeEditor-Isolated-Test-APK` — unique-ID side-by-side phone test APK (`Blake T<run>a<attempt>`)
-3. `BlakePersonal-UNSIGNED-SIGN-FIRST` — unsigned release APK (`com.blake.editor.personal`, `versionCode = 2`) for owner-controlled offline signing
+GitHub Actions (`.github/workflows/build-apk.yml`) runs unit tests on every PR and automatically builds, signs, and publishes a direct ready-to-install **`Blake-v<version>.apk`** on [GitHub Releases](https://github.com/sirawitchotika-boop/BlakeEditor-/releases) whenever `main` is updated.
